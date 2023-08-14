@@ -137,10 +137,10 @@ fn makePtrLocationType(comptime K: type, comptime V: type) type {
         fn balance(self: *const Self) i8 {
             var b: i8 = 0;
             if (self.ptr.*.right) |right| {
-                b += 1 + @intCast(i8, right.ptr.*.data.h);
+                b += 1 + @as(i8, @intCast(right.ptr.*.data.h));
             }
             if (self.ptr.*.left) |left| {
-                b -= 1 + @intCast(i8, left.ptr.*.data.h);
+                b -= 1 + @as(i8, @intCast(left.ptr.*.data.h));
             }
             return b;
         }
@@ -805,14 +805,14 @@ pub fn Tree(comptime K: type, comptime V: type, comptime Cmp: fn (a: K, b: K) ma
             }
             if (!self.options.countChildren or self.shouldLocateAtLineary(pos)) {
                 if (pos < self.length / 2) {
-                    return advance(self.min.?, @intCast(isize, pos));
+                    return advance(self.min.?, @as(isize, @intCast(pos)));
                 }
-                return advance(self.max.?, -@intCast(isize, self.length - pos - 1));
+                return advance(self.max.?, -@as(isize, @intCast(self.length - pos - 1)));
             }
             var loc = self.root.?;
             var p = pos;
             while (true) {
-                var left_count = @intCast(usize, loc.data().l);
+                var left_count = @as(usize, @intCast(loc.data().l));
                 if (p == left_count) {
                     return loc;
                 }
@@ -1031,7 +1031,7 @@ test "tree at_countChildren" {
 
     i = 0;
     while (i <= 128) {
-        var e = t.at(@intCast(usize, i));
+        var e = t.at(@as(usize, @intCast(i)));
         try std.testing.expectEqual(i, e.k);
         try std.testing.expectEqual(i, e.v.*);
         i += 1;
@@ -1052,7 +1052,7 @@ test "tree at_nocountChildren" {
 
     i = 0;
     while (i <= 128) {
-        var e = t.at(@intCast(usize, i));
+        var e = t.at(@as(usize, @intCast(i)));
         try std.testing.expectEqual(i, e.k);
         try std.testing.expectEqual(i, e.v.*);
         i += 1;
@@ -1129,7 +1129,7 @@ test "tree random" {
     defer t.deinit();
     var arr = try a.alloc(i64, 2048);
     for (arr, 0..) |_, idx| {
-        arr[idx] = @intCast(i64, idx);
+        arr[idx] = @as(i64, @intCast(idx));
     }
     defer a.free(arr);
     var i: i64 = 0;
