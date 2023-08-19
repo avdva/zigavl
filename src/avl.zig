@@ -576,12 +576,14 @@ pub fn Tree(comptime K: type, comptime V: type, comptime Cmp: fn (a: K, b: K) ma
 
         // get returns a value for key k.
         // Time complexity: O(logn).
-        pub fn get(self: *Self, k: K) ?V {
+        pub fn get(self: *Self, k: K) ?*V {
             var res = self.locate(k);
-            if (res.loc == null or res.dir != .center) {
-                return null;
+            if (res.dir == .center) {
+                if (res.loc) |loc| {
+                    return &loc.data().v;
+                }
             }
-            return res.loc.?.data().v;
+            return null;
         }
 
         // at returns a an entry at the ith position of the sorted array.
@@ -879,7 +881,7 @@ test "tree insert" {
     while (i < 128) {
         var v = t.get(i);
         try std.testing.expect(v != null);
-        try std.testing.expectEqual(i, v.?);
+        try std.testing.expectEqual(i, v.?.*);
         i += 1;
     }
 
@@ -900,7 +902,7 @@ test "tree insert" {
     while (i < 128) {
         var v = t.get(i);
         try std.testing.expect(v != null);
-        try std.testing.expectEqual(i * 2, v.?);
+        try std.testing.expectEqual(i * 2, v.?.*);
         i += 1;
     }
 }
