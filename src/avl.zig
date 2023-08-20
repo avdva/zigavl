@@ -409,27 +409,57 @@ pub fn Tree(comptime K: type, comptime V: type, comptime Cmp: fn (a: K, b: K) ma
             return self.length;
         }
 
-        // Insert inserts a node into the tree.
-        // Returns true, if a new node was added, and false otherwise.
+        // InsertResult is returned from any function that inserts data to the tree.
+        //  inserted == true if a new node was added to the tree.
+        //  v - a pointer to the data, extisting before the call, or the newly added.
+        pub const InsertResult = struct {
+            inserted: bool,
+            v: *V,
+        };
+
+        // getOrInsert inserts new kv pair into the tree if tke key is not present.
+        // Time complexity: O(logn).
+        pub fn getOrInsert(self: *Self, k: K, v: V) !InsertResult {
+            return self.doInsert(k, v, false);
+        }
+
+        // insert inserts a node into the tree.
         // If the key `k` was present in the tree, node's value is updated to `v`.
         // Time complexity: O(logn).
-        pub fn insert(self: *Self, k: K, v: V) !bool {
+        pub fn insert(self: *Self, k: K, v: V) !InsertResult {
+            return self.doInsert(k, v, true);
+        }
+
+        fn doInsert(self: *Self, k: K, v: V, updateExisting: bool) !InsertResult {
             var res = self.locate(k);
             if (res.loc) |l| {
                 if (res.dir == .center) {
-                    l.data().v = v;
-                    return false;
+                    if (updateExisting) {
+                        l.data().v = v;
+                    }
+                    return InsertResult{
+                        .inserted = false,
+                        .v = &l.data().v,
+                    };
                 }
             }
+            var loc = try self.insertNew(res, k, v);
+            return InsertResult{
+                .inserted = true,
+                .v = &loc.data().v,
+            };
+        }
+
+        fn insertNew(self: *Self, where: LocateResult, k: K, v: V) !Location {
             var new_node = try self.lc.create(k, v);
             self.length += 1;
-            switch (res.dir) {
+            switch (where.dir) {
                 .left, .right => {
-                    var l = res.loc orelse unreachable;
-                    reparent(res.loc, res.dir, new_node);
-                    if (res.dir == .left and res.loc.?.eq(self.min.?)) {
+                    var l = where.loc orelse unreachable;
+                    reparent(l, where.dir, new_node);
+                    if (where.dir == .left and l.eq(self.min.?)) {
                         self.min = new_node;
-                    } else if (res.dir == .right and res.loc.?.eq(self.max.?)) {
+                    } else if (where.dir == .right and l.eq(self.max.?)) {
                         self.max = new_node;
                     }
                     if (l.recalcHeight()) {
@@ -438,7 +468,7 @@ pub fn Tree(comptime K: type, comptime V: type, comptime Cmp: fn (a: K, b: K) ma
                         }
                         self.checkBalance(l.parent(), false);
                     } else {
-                        updateCounts(res.loc.?);
+                        updateCounts(l);
                     }
                 },
                 .center => {
@@ -447,7 +477,7 @@ pub fn Tree(comptime K: type, comptime V: type, comptime Cmp: fn (a: K, b: K) ma
                     self.max = new_node;
                 },
             }
-            return true;
+            return new_node;
         }
 
         fn deleteLocation(self: *Self, loc: Location) void {
@@ -846,6 +876,26 @@ test "empty tree" {
     try std.testing.expect(t.delete(0) == null);
 }
 
+test "tree getOrInsert" {
+    var a = std.testing.allocator;
+    const TreeType = Tree(i64, i64, i64Cmp);
+    var t = TreeType.init(a, .{});
+    defer t.deinit();
+    var ir = t.insert(1, 1) catch unreachable;
+    try std.testing.expectEqual(true, ir.inserted);
+    ir = try t.getOrInsert(1, 2);
+    try std.testing.expectEqual(false, ir.inserted);
+    try std.testing.expectEqual(@as(i64, 1), ir.v.*);
+    ir = t.insert(1, 1) catch unreachable;
+    try std.testing.expectEqual(false, ir.inserted);
+    ir.v.* = 2;
+    try std.testing.expectEqual(@as(i64, 2), t.get(1).?.*);
+    ir = try t.getOrInsert(2, 2);
+    try std.testing.expectEqual(@as(i64, 2), t.get(2).?.*);
+    ir.v.* = 3;
+    try std.testing.expectEqual(@as(i64, 3), t.get(2).?.*);
+}
+
 test "tree insert" {
     var a = std.testing.allocator;
     const TreeType = Tree(i64, i64, i64Cmp);
@@ -853,8 +903,9 @@ test "tree insert" {
     defer t.deinit();
     var i: i64 = 0;
     while (i < 128) {
-        var inserted = try t.insert(i, i);
-        try std.testing.expect(inserted);
+        var ir = try t.insert(i, i);
+        try std.testing.expectEqual(true, ir.inserted);
+        try std.testing.expectEqual(i, ir.v.*);
 
         var min = t.getMin();
         try std.testing.expect(min != null);
@@ -887,8 +938,9 @@ test "tree insert" {
 
     i = 127;
     while (i >= 0) {
-        var inserted = try t.insert(i, i * 2);
-        try std.testing.expect(!inserted);
+        var ir = try t.insert(i, i * 2);
+        try std.testing.expect(!ir.inserted);
+        try std.testing.expectEqual(i * 2, ir.v.*);
         try checkHeightAndBalance(
             i64,
             i64,
@@ -914,13 +966,16 @@ test "tree delete" {
     defer t.deinit();
     var exp_len: usize = 0;
     try std.testing.expectEqual(exp_len, t.len());
-    try std.testing.expect(try t.insert(0, 0));
+    var ir = try t.insert(0, 0);
+    try std.testing.expect(ir.inserted);
     var exp: i64 = 0;
     try std.testing.expectEqual(exp, t.delete(0).?);
     try checkHeightAndBalance(i64, i64, TreeType.Comparer, t.root);
 
-    try std.testing.expect(try t.insert(0, 0));
-    try std.testing.expect(try t.insert(-1, -1));
+    ir = try t.insert(0, 0);
+    try std.testing.expect(ir.inserted);
+    ir = try t.insert(-1, -1);
+    try std.testing.expect(ir.inserted);
     exp_len = 2;
     try std.testing.expectEqual(exp_len, t.len());
     try checkHeightAndBalance(i64, i64, TreeType.Comparer, t.root);
@@ -931,8 +986,10 @@ test "tree delete" {
     exp_len = 0;
     try std.testing.expectEqual(exp_len, t.len());
 
-    try std.testing.expect(try t.insert(0, 0));
-    try std.testing.expect(try t.insert(1, 1));
+    ir = try t.insert(0, 0);
+    try std.testing.expect(ir.inserted);
+    ir = try t.insert(1, 1);
+    try std.testing.expect(ir.inserted);
     exp_len = 2;
     try std.testing.expectEqual(exp_len, t.len());
     try checkHeightAndBalance(i64, i64, TreeType.Comparer, t.root);
@@ -947,8 +1004,10 @@ test "tree delete" {
     exp_len = 0;
     try std.testing.expectEqual(exp_len, t.len());
 
-    try std.testing.expect(try t.insert(0, 0));
-    try std.testing.expect(try t.insert(1, 1));
+    ir = try t.insert(0, 0);
+    try std.testing.expect(ir.inserted);
+    ir = try t.insert(1, 1);
+    try std.testing.expect(ir.inserted);
     exp = 0;
     try std.testing.expectEqual(exp, t.delete(0).?);
     exp_len = 1;
@@ -962,7 +1021,9 @@ test "tree delete" {
 
     var i: i64 = 128;
     while (i >= 0) {
-        try std.testing.expect(try t.insert(i, i));
+        ir = try t.insert(i, i);
+        try std.testing.expect(ir.inserted);
+        try std.testing.expectEqual(i, ir.v.*);
         i -= 1;
     }
     i = 128;
@@ -981,7 +1042,8 @@ test "delete min" {
 
     var i: i64 = 0;
     while (i <= 128) {
-        try std.testing.expect(try t.insert(i, i));
+        var ir = try t.insert(i, i);
+        try std.testing.expect(ir.inserted);
         i += 1;
     }
     i = 0;
@@ -1004,7 +1066,8 @@ test "delete max" {
 
     var i: i64 = 0;
     while (i <= 128) {
-        try std.testing.expect(try t.insert(i, i));
+        var ir = try t.insert(i, i);
+        try std.testing.expect(ir.inserted);
         i += 1;
     }
     i = 0;
@@ -1027,7 +1090,8 @@ test "tree at_countChildren" {
 
     var i: i64 = 0;
     while (i <= 128) {
-        try std.testing.expect(try t.insert(i, i));
+        var ir = try t.insert(i, i);
+        try std.testing.expect(ir.inserted);
         i += 1;
     }
 
@@ -1048,7 +1112,8 @@ test "tree at_nocountChildren" {
 
     var i: i64 = 0;
     while (i <= 128) {
-        try std.testing.expect(try t.insert(i, i));
+        var ir = try t.insert(i, i);
+        try std.testing.expect(ir.inserted);
         i += 1;
     }
 
@@ -1069,7 +1134,8 @@ test "tree deleteAt" {
 
     var i: i64 = 0;
     while (i < 128) {
-        try std.testing.expect(try t.insert(i, i));
+        var ir = try t.insert(i, i);
+        try std.testing.expect(ir.inserted);
         i += 1;
     }
 
@@ -1100,7 +1166,8 @@ test "tree iterator" {
 
     var i: i64 = 0;
     while (i < 128) {
-        try std.testing.expect(try t.insert(i, i));
+        var ir = try t.insert(i, i);
+        try std.testing.expect(ir.inserted);
         i += 1;
     }
     var it = t.ascendFromStart();
@@ -1140,7 +1207,9 @@ test "tree random" {
         var r = std.rand.DefaultPrng.init(0);
         r.random().shuffle(i64, arr);
         for (arr) |val| {
-            try std.testing.expect(try t.insert(val, val));
+            var ir = try t.insert(val, val);
+            try std.testing.expect(ir.inserted);
+            try std.testing.expectEqual(val, ir.v.*);
             try checkHeightAndBalance(i64, i64, TreeType.Comparer, t.root);
         }
         r.random().shuffle(i64, arr);
