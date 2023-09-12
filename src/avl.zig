@@ -15,19 +15,13 @@ const direction = enum {
     }
 };
 
-fn makeNodeData(comptime K: type, comptime V: type) type {
+fn makeNodeData(comptime K: type, comptime V: type, comptime Tags: type) type {
     return struct {
         const Self = @This();
-        const ChildCountType = u28;
         k: K,
         v: V,
         h: u8,
-        l: ChildCountType,
-        r: ChildCountType,
-
-        fn childrenCount(self: *const Self) ChildCountType {
-            return self.l + self.r;
-        }
+        tags: Tags,
 
         fn setHeight(self: *Self, h: u8) bool {
             var old = self.h;
@@ -37,24 +31,23 @@ fn makeNodeData(comptime K: type, comptime V: type) type {
     };
 }
 
-fn makeNode(comptime K: type, comptime V: type, comptime L: type) type {
+fn makeNode(comptime K: type, comptime V: type, comptime L: type, comptime Tags: type) type {
     return struct {
         const Self = @This();
-        const NodeData = makeNodeData(K, V);
+        const NodeData = makeNodeData(K, V, Tags);
 
         data: NodeData,
         left: ?L,
         right: ?L,
         parent: ?L,
 
-        fn init(k: K, v: V) Self {
+        fn init(k: K, v: V, tags: Tags) Self {
             return Self{
                 .data = NodeData{
                     .k = k,
                     .v = v,
                     .h = 0,
-                    .l = 0,
-                    .r = 0,
+                    .tags = tags,
                 },
                 .left = null,
                 .right = null,
@@ -64,10 +57,10 @@ fn makeNode(comptime K: type, comptime V: type, comptime L: type) type {
     };
 }
 
-fn makePtrLocationType(comptime K: type, comptime V: type) type {
+fn makePtrLocationType(comptime K: type, comptime V: type, comptime Tags: type) type {
     return struct {
         const Self = @This();
-        const Node = makeNode(K, V, Self);
+        const Node = makeNode(K, V, Self, Tags);
         const NodeData = Node.NodeData;
 
         ptr: *Node,
@@ -121,19 +114,6 @@ fn makePtrLocationType(comptime K: type, comptime V: type) type {
             return self.data().setHeight(h);
         }
 
-        fn recalcCounts(self: *Self) void {
-            var l: NodeData.ChildCountType = 0;
-            var r: NodeData.ChildCountType = 0;
-            if (self.ptr.*.left) |left| {
-                l = 1 + left.ptr.*.data.childrenCount();
-            }
-            if (self.ptr.*.right) |right| {
-                r = 1 + right.ptr.*.data.childrenCount();
-            }
-            self.data().l = l;
-            self.data().r = r;
-        }
-
         fn balance(self: *const Self) i8 {
             var b: i8 = 0;
             if (self.ptr.*.right) |right| {
@@ -147,10 +127,10 @@ fn makePtrLocationType(comptime K: type, comptime V: type) type {
     };
 }
 
-fn locationCache(comptime K: type, comptime V: type) type {
+fn locationCache(comptime K: type, comptime V: type, comptime Tags: type) type {
     return struct {
         const Self = @This();
-        const Location = makePtrLocationType(K, V);
+        const Location = makePtrLocationType(K, V, Tags);
 
         a: std.mem.Allocator,
 
@@ -160,9 +140,9 @@ fn locationCache(comptime K: type, comptime V: type) type {
             };
         }
 
-        fn create(self: *Self, k: K, v: V) !Location {
+        fn create(self: *Self, k: K, v: V, tags: Tags) !Location {
             var node = try self.a.create(Location.Node);
-            node.* = Location.Node.init(k, v);
+            node.* = Location.Node.init(k, v, tags);
             return Location.init(node);
         }
 
@@ -175,8 +155,7 @@ fn locationCache(comptime K: type, comptime V: type) type {
 // Options defines some parameters of the tree.
 pub const Options = struct {
     // countChildren, if set, enables children counts for every node of the tree.
-    // the numbers of children in the left and right subtrees allows to locate
-    // a node by its position with a guaranteed complexity O(logn)
+    // the number of children allows to locate a node by its position with a guaranteed complexity O(logn).
     countChildren: bool = false,
 };
 
@@ -188,10 +167,19 @@ pub const Options = struct {
 //  V - value type
 //  Cmp - a comparator.
 pub fn Tree(comptime K: type, comptime V: type, comptime Cmp: fn (a: K, b: K) math.Order) type {
+    return TreeWithOptions(K, V, Cmp, .{});
+}
+
+// TreeWithOptions acts like Tree func, but also accepts compile-known Options.
+pub fn TreeWithOptions(comptime K: type, comptime V: type, comptime Cmp: fn (a: K, b: K) math.Order, comptime options: Options) type {
     return struct {
         const Self = @This();
+        const Tags = if (options.countChildren)
+            struct { childrenCount: u32 = 0 }
+        else
+            struct {};
 
-        const Cache = locationCache(K, V);
+        const Cache = locationCache(K, V, Tags);
         const Location = Cache.Location;
         const Comparer = Cmp;
 
@@ -342,6 +330,33 @@ pub fn Tree(comptime K: type, comptime V: type, comptime Cmp: fn (a: K, b: K) ma
             return .center;
         }
 
+        fn recalcCounts(loc: Location) void {
+            var count: u32 = 0;
+            if (loc.ptr.*.left) |left| {
+                count += 1 + left.data().tags.childrenCount;
+            }
+            if (loc.ptr.*.right) |right| {
+                count += 1 + right.data().tags.childrenCount;
+            }
+            loc.data().tags.childrenCount = count;
+        }
+
+        fn updateCounts(loc: Location) void {
+            var mutLoc: ?Location = loc;
+            while (true) {
+                var l = mutLoc orelse break;
+                recalcCounts(l);
+                mutLoc = l.parent();
+            }
+        }
+
+        fn leftCount(loc: Location) usize {
+            if (loc.ptr.*.left) |left| {
+                return 1 + left.data().tags.childrenCount;
+            }
+            return 0;
+        }
+
         pub const Iterator = struct {
             tree: *Self,
             loc: ?Location,
@@ -375,17 +390,15 @@ pub fn Tree(comptime K: type, comptime V: type, comptime Cmp: fn (a: K, b: K) ma
         };
 
         lc: Cache,
-        options: Options,
         length: usize,
         root: ?Location,
         min: ?Location,
         max: ?Location,
 
         // init itializes the tree.
-        pub fn init(a: std.mem.Allocator, options: Options) Self {
+        pub fn init(a: std.mem.Allocator) Self {
             return Self{
                 .lc = Cache.init(a),
-                .options = options,
                 .length = 0,
                 .root = null,
                 .min = null,
@@ -405,7 +418,7 @@ pub fn Tree(comptime K: type, comptime V: type, comptime Cmp: fn (a: K, b: K) ma
         }
 
         // len returns the number of elements.
-        pub fn len(self: *Self) usize {
+        pub fn len(self: *const Self) usize {
             return self.length;
         }
 
@@ -451,7 +464,7 @@ pub fn Tree(comptime K: type, comptime V: type, comptime Cmp: fn (a: K, b: K) ma
         }
 
         fn insertNew(self: *Self, where: LocateResult, k: K, v: V) !Location {
-            var new_node = try self.lc.create(k, v);
+            var new_node = try self.lc.create(k, v, .{});
             self.length += 1;
             switch (where.dir) {
                 .left, .right => {
@@ -463,12 +476,14 @@ pub fn Tree(comptime K: type, comptime V: type, comptime Cmp: fn (a: K, b: K) ma
                         self.max = new_node;
                     }
                     if (l.recalcHeight()) {
-                        if (self.options.countChildren) {
-                            l.recalcCounts();
+                        if (options.countChildren) {
+                            recalcCounts(l);
                         }
                         self.checkBalance(l.parent(), false);
                     } else {
-                        updateCounts(l);
+                        if (options.countChildren) {
+                            updateCounts(l);
+                        }
                     }
                 },
                 .center => {
@@ -645,15 +660,6 @@ pub fn Tree(comptime K: type, comptime V: type, comptime Cmp: fn (a: K, b: K) ma
             }
         }
 
-        fn updateCounts(loc: Location) void {
-            var mutLoc: ?Location = loc;
-            while (true) {
-                var l = mutLoc orelse break;
-                l.recalcCounts();
-                mutLoc = l.parent();
-            }
-        }
-
         fn checkBalance(self: *Self, loc: ?Location, all_way_up: bool) void {
             var mutLoc = loc;
             while (true) {
@@ -677,11 +683,13 @@ pub fn Tree(comptime K: type, comptime V: type, comptime Cmp: fn (a: K, b: K) ma
                     },
                     else => {
                         if (!heightChanged and !all_way_up) {
-                            updateCounts(l);
+                            if (options.countChildren) {
+                                updateCounts(l);
+                            }
                             return;
                         }
-                        if (self.options.countChildren) {
-                            l.recalcCounts();
+                        if (options.countChildren) {
+                            recalcCounts(l);
                         }
                     },
                 }
@@ -706,9 +714,9 @@ pub fn Tree(comptime K: type, comptime V: type, comptime Cmp: fn (a: K, b: K) ma
             _ = l.recalcHeight();
             _ = left.recalcHeight();
 
-            if (self.options.countChildren) {
-                l.recalcCounts();
-                left.recalcCounts();
+            if (options.countChildren) {
+                recalcCounts(l);
+                recalcCounts(left);
             }
         }
 
@@ -735,10 +743,10 @@ pub fn Tree(comptime K: type, comptime V: type, comptime Cmp: fn (a: K, b: K) ma
             _ = left.recalcHeight();
             _ = left_right.recalcHeight();
 
-            if (self.options.countChildren) {
-                l.recalcCounts();
-                left.recalcCounts();
-                left_right.recalcCounts();
+            if (options.countChildren) {
+                recalcCounts(l);
+                recalcCounts(left);
+                recalcCounts(left_right);
             }
         }
 
@@ -766,10 +774,10 @@ pub fn Tree(comptime K: type, comptime V: type, comptime Cmp: fn (a: K, b: K) ma
             _ = right.recalcHeight();
             _ = right_left.recalcHeight();
 
-            if (self.options.countChildren) {
-                l.recalcCounts();
-                right.recalcCounts();
-                right_left.recalcCounts();
+            if (options.countChildren) {
+                recalcCounts(l);
+                recalcCounts(right);
+                recalcCounts(right_left);
             }
         }
 
@@ -790,9 +798,9 @@ pub fn Tree(comptime K: type, comptime V: type, comptime Cmp: fn (a: K, b: K) ma
             _ = l.recalcHeight();
             _ = right.recalcHeight();
 
-            if (self.options.countChildren) {
-                l.recalcCounts();
-                right.recalcCounts();
+            if (options.countChildren) {
+                recalcCounts(l);
+                recalcCounts(right);
             }
         }
 
@@ -835,7 +843,7 @@ pub fn Tree(comptime K: type, comptime V: type, comptime Cmp: fn (a: K, b: K) ma
             if (pos >= self.len()) {
                 @panic("index out of range");
             }
-            if (!self.options.countChildren or self.shouldLocateAtLineary(pos)) {
+            if (!options.countChildren or self.shouldLocateAtLineary(pos)) {
                 if (pos < self.length / 2) {
                     return advance(self.min.?, @as(isize, @intCast(pos)));
                 }
@@ -844,7 +852,7 @@ pub fn Tree(comptime K: type, comptime V: type, comptime Cmp: fn (a: K, b: K) ma
             var loc = self.root.?;
             var p = pos;
             while (true) {
-                var left_count = @as(usize, @intCast(loc.data().l));
+                var left_count = leftCount(loc);
                 if (p == left_count) {
                     return loc;
                 }
@@ -865,8 +873,8 @@ fn i64Cmp(a: i64, b: i64) math.Order {
 
 test "empty tree" {
     var a = std.testing.allocator;
-    const TreeType = Tree(i64, i64, i64Cmp);
-    var t = TreeType.init(a, .{});
+    const TreeType = TreeWithOptions(i64, i64, i64Cmp, .{ .countChildren = true });
+    var t = TreeType.init(a);
     defer t.deinit();
 
     var it = t.ascendFromStart();
@@ -879,7 +887,7 @@ test "empty tree" {
 test "tree getOrInsert" {
     var a = std.testing.allocator;
     const TreeType = Tree(i64, i64, i64Cmp);
-    var t = TreeType.init(a, .{});
+    var t = TreeType.init(a);
     defer t.deinit();
     var ir = t.insert(1, 1) catch unreachable;
     try std.testing.expectEqual(true, ir.inserted);
@@ -899,7 +907,7 @@ test "tree getOrInsert" {
 test "tree insert" {
     var a = std.testing.allocator;
     const TreeType = Tree(i64, i64, i64Cmp);
-    var t = TreeType.init(a, .{});
+    var t = TreeType.init(a);
     defer t.deinit();
     var i: i64 = 0;
     while (i < 128) {
@@ -921,6 +929,7 @@ test "tree insert" {
         try checkHeightAndBalance(
             i64,
             i64,
+            TreeType.Location,
             TreeType.Comparer,
             t.root,
         );
@@ -944,6 +953,7 @@ test "tree insert" {
         try checkHeightAndBalance(
             i64,
             i64,
+            TreeType.Location,
             TreeType.Comparer,
             t.root,
         );
@@ -961,8 +971,8 @@ test "tree insert" {
 
 test "tree delete" {
     var a = std.testing.allocator;
-    const TreeType = Tree(i64, i64, i64Cmp);
-    var t = TreeType.init(a, .{ .countChildren = true });
+    const TreeType = TreeWithOptions(i64, i64, i64Cmp, .{ .countChildren = true });
+    var t = TreeType.init(a);
     defer t.deinit();
     var exp_len: usize = 0;
     try std.testing.expectEqual(exp_len, t.len());
@@ -970,7 +980,7 @@ test "tree delete" {
     try std.testing.expect(ir.inserted);
     var exp: i64 = 0;
     try std.testing.expectEqual(exp, t.delete(0).?);
-    try checkHeightAndBalance(i64, i64, TreeType.Comparer, t.root);
+    try checkHeightAndBalance(i64, i64, TreeType.Location, TreeType.Comparer, t.root);
 
     ir = try t.insert(0, 0);
     try std.testing.expect(ir.inserted);
@@ -978,7 +988,7 @@ test "tree delete" {
     try std.testing.expect(ir.inserted);
     exp_len = 2;
     try std.testing.expectEqual(exp_len, t.len());
-    try checkHeightAndBalance(i64, i64, TreeType.Comparer, t.root);
+    try checkHeightAndBalance(i64, i64, TreeType.Location, TreeType.Comparer, t.root);
     exp = 0;
     try std.testing.expectEqual(exp, t.delete(0).?);
     exp = -1;
@@ -992,13 +1002,13 @@ test "tree delete" {
     try std.testing.expect(ir.inserted);
     exp_len = 2;
     try std.testing.expectEqual(exp_len, t.len());
-    try checkHeightAndBalance(i64, i64, TreeType.Comparer, t.root);
+    try checkHeightAndBalance(i64, i64, TreeType.Location, TreeType.Comparer, t.root);
     exp = 1;
     try std.testing.expectEqual(exp, t.delete(1).?);
     exp_len = 1;
     try std.testing.expectEqual(exp_len, t.len());
     try std.testing.expectEqual(@as(?i64, null), t.delete(-1));
-    try checkHeightAndBalance(i64, i64, TreeType.Comparer, t.root);
+    try checkHeightAndBalance(i64, i64, TreeType.Location, TreeType.Comparer, t.root);
     exp = 0;
     try std.testing.expectEqual(exp, t.delete(0).?);
     exp_len = 0;
@@ -1012,10 +1022,10 @@ test "tree delete" {
     try std.testing.expectEqual(exp, t.delete(0).?);
     exp_len = 1;
     try std.testing.expectEqual(exp_len, t.len());
-    try checkHeightAndBalance(i64, i64, TreeType.Comparer, t.root);
+    try checkHeightAndBalance(i64, i64, TreeType.Location, TreeType.Comparer, t.root);
     exp = 1;
     try std.testing.expectEqual(exp, t.delete(1).?);
-    try checkHeightAndBalance(i64, i64, TreeType.Comparer, t.root);
+    try checkHeightAndBalance(i64, i64, TreeType.Location, TreeType.Comparer, t.root);
     exp_len = 0;
     try std.testing.expectEqual(exp_len, t.len());
 
@@ -1029,15 +1039,15 @@ test "tree delete" {
     i = 128;
     while (i >= 0) {
         try std.testing.expectEqual(i, t.delete(i).?);
-        try checkHeightAndBalance(i64, i64, TreeType.Comparer, t.root);
+        try checkHeightAndBalance(i64, i64, TreeType.Location, TreeType.Comparer, t.root);
         i -= 1;
     }
 }
 
 test "delete min" {
     var a = std.testing.allocator;
-    const TreeType = Tree(i64, i64, i64Cmp);
-    var t = TreeType.init(a, .{ .countChildren = true });
+    const TreeType = TreeWithOptions(i64, i64, i64Cmp, .{ .countChildren = true });
+    var t = TreeType.init(a);
     defer t.deinit();
 
     var i: i64 = 0;
@@ -1060,8 +1070,8 @@ test "delete min" {
 
 test "delete max" {
     var a = std.testing.allocator;
-    const TreeType = Tree(i64, i64, i64Cmp);
-    var t = TreeType.init(a, .{ .countChildren = true });
+    const TreeType = TreeWithOptions(i64, i64, i64Cmp, .{ .countChildren = true });
+    var t = TreeType.init(a);
     defer t.deinit();
 
     var i: i64 = 0;
@@ -1084,8 +1094,8 @@ test "delete max" {
 
 test "tree at_countChildren" {
     var a = std.testing.allocator;
-    const TreeType = Tree(i64, i64, i64Cmp);
-    var t = TreeType.init(a, .{ .countChildren = true });
+    const TreeType = TreeWithOptions(i64, i64, i64Cmp, .{ .countChildren = true });
+    var t = TreeType.init(a);
     defer t.deinit();
 
     var i: i64 = 0;
@@ -1106,8 +1116,8 @@ test "tree at_countChildren" {
 
 test "tree at_nocountChildren" {
     var a = std.testing.allocator;
-    const TreeType = Tree(i64, i64, i64Cmp);
-    var t = TreeType.init(a, .{ .countChildren = false });
+    const TreeType = TreeWithOptions(i64, i64, i64Cmp, .{ .countChildren = true });
+    var t = TreeType.init(a);
     defer t.deinit();
 
     var i: i64 = 0;
@@ -1128,8 +1138,8 @@ test "tree at_nocountChildren" {
 
 test "tree deleteAt" {
     var a = std.testing.allocator;
-    const TreeType = Tree(i64, i64, i64Cmp);
-    var t = TreeType.init(a, .{ .countChildren = true });
+    const TreeType = TreeWithOptions(i64, i64, i64Cmp, .{ .countChildren = true });
+    var t = TreeType.init(a);
     defer t.deinit();
 
     var i: i64 = 0;
@@ -1160,8 +1170,8 @@ test "tree deleteAt" {
 
 test "tree iterator" {
     var a = std.testing.allocator;
-    const TreeType = Tree(i64, i64, i64Cmp);
-    var t = TreeType.init(a, .{ .countChildren = true });
+    const TreeType = TreeWithOptions(i64, i64, i64Cmp, .{ .countChildren = true });
+    var t = TreeType.init(a);
     defer t.deinit();
 
     var i: i64 = 0;
@@ -1193,8 +1203,8 @@ test "tree iterator" {
 
 test "tree random" {
     var a = std.testing.allocator;
-    const TreeType = Tree(i64, i64, i64Cmp);
-    var t = TreeType.init(a, .{ .countChildren = true });
+    const TreeType = TreeWithOptions(i64, i64, i64Cmp, .{ .countChildren = true });
+    var t = TreeType.init(a);
     defer t.deinit();
     var arr = try a.alloc(i64, 2048);
     for (arr, 0..) |_, idx| {
@@ -1210,20 +1220,20 @@ test "tree random" {
             var ir = try t.insert(val, val);
             try std.testing.expect(ir.inserted);
             try std.testing.expectEqual(val, ir.v.*);
-            try checkHeightAndBalance(i64, i64, TreeType.Comparer, t.root);
+            try checkHeightAndBalance(i64, i64, TreeType.Location, TreeType.Comparer, t.root);
         }
         r.random().shuffle(i64, arr);
         for (arr) |val| {
             try std.testing.expectEqual(val, t.delete(val).?);
-            try checkHeightAndBalance(i64, i64, TreeType.Comparer, t.root);
+            try checkHeightAndBalance(i64, i64, TreeType.Location, TreeType.Comparer, t.root);
         }
         try std.testing.expectEqual(exp_len, t.len());
         i += 1;
     }
 }
 
-fn checkHeightAndBalance(comptime K: type, comptime V: type, comptime Cmp: fn (a: K, b: K) math.Order, loc: ?Tree(K, V, Cmp).Location) !void {
-    _ = try recalcHeightAndBalance(K, V, Cmp, loc);
+fn checkHeightAndBalance(comptime K: type, comptime V: type, comptime L: type, comptime Cmp: fn (a: K, b: K) math.Order, loc: ?L) !void {
+    _ = try recalcHeightAndBalance(K, V, L, Cmp, loc);
 }
 
 const recalcResult = struct {
@@ -1240,16 +1250,16 @@ const recalcResult = struct {
     }
 };
 
-fn recalcHeightAndBalance(comptime K: type, comptime V: type, comptime Cmp: fn (a: K, b: K) math.Order, loc: ?Tree(K, V, Cmp).Location) !recalcResult {
+fn recalcHeightAndBalance(comptime K: type, comptime V: type, comptime L: type, comptime Cmp: fn (a: K, b: K) math.Order, loc: ?L) !recalcResult {
     var result = recalcResult.init();
     var l = loc orelse return result;
     if (l.child(.left) != null) {
-        var lRes = try recalcHeightAndBalance(K, V, Cmp, l.child(.left));
+        var lRes = try recalcHeightAndBalance(K, V, L, Cmp, l.child(.left));
         result.height = 1 + lRes.height;
         result.l_count = lRes.l_count + lRes.r_count + 1;
     }
     if (l.child(.right) != null) {
-        var rRes = try recalcHeightAndBalance(K, V, Cmp, l.child(.right));
+        var rRes = try recalcHeightAndBalance(K, V, L, Cmp, l.child(.right));
         result.height = @max(result.height, 1 + rRes.height);
         result.r_count = rRes.r_count + rRes.l_count + 1;
     }
