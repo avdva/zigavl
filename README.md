@@ -6,45 +6,38 @@ A self-balancing binary [AVL](https://en.wikipedia.org/wiki/AVL_tree) tree writt
 ![Build Status](https://img.shields.io/github/actions/workflow/status/ultd/base58-zig/test.yml?branch=main)
 
 ## API
-```
-Create Generic tree type:
-// Options defines some parameters of the tree.
-pub const Options = struct {
-    // countChildren, if set, enables children counts for every node of the tree.
-    // the number of children allows to locate a node by its position with a guaranteed complexity O(logn).
-    countChildren: bool = false,
-};
+```zig
 pub fn TreeWithOptions(comptime K: type, comptime V: type, comptime Cmp: fn (a: K, b: K) math.Order, comptime options: Options) type
 pub fn Tree(comptime K: type, comptime V: type, comptime Cmp: fn (a: K, b: K) math.Order) type
 
-init/deinit:
+// init/deinit:
 pub fn init(a: std.mem.Allocator) Self
 pub fn deinit()
 
-insert:
+// insert:
 pub fn getOrInsert(self: *Self, k: K, v: V) !InsertResult 
 pub fn insert(self: *Self, k: K, v: V) !InsertResult
 
-delete:
+// delete:
 pub fn delete(self: *Self, k: K) ?V
 
-find:
+// find:
 pub fn getMin(self: *Self) ?Entry
 pub fn getMax(self: *Self) ?Entry
 pub fn get(self: *Self, k: K) ?*V
 
-array-style access:
+// array-style access:
 pub fn at(self: *Self, pos: usize) Entry
 pub fn deleteAt(self: *Self, pos: usize) V
 
-iterate:
+// iterate:
 pub fn ascendFromStart(self: *Self) Iterator
 pub fn descendFromEnd(self: *Self) Iterator
 
 ```
 
 Example:
-```
+```zig
 pub fn main() !void {
     var gpa = std.heap.GeneralPurposeAllocator(.{}){};
     defer _ = gpa.detectLeaks();
