@@ -1,6 +1,6 @@
 const std = @import("std");
 const math = std.math;
-const Tree = @import("./avl.zig").Tree;
+const lib = @import("./lib.zig");
 
 fn i64Cmp(a: i64, b: i64) math.Order {
     return math.order(a, b);
@@ -8,7 +8,7 @@ fn i64Cmp(a: i64, b: i64) math.Order {
 
 test "test pub decls" {
     var a = std.testing.allocator;
-    const TreeType = Tree(i64, i64, i64Cmp);
+    const TreeType = lib.Tree(i64, i64, i64Cmp);
     var t = TreeType.init(a);
     defer t.deinit();
     _ = try t.insert(0, 0);
@@ -22,4 +22,38 @@ test "test pub decls" {
     try std.testing.expectEqual(@as(i64, 0), t.at(0).v.*);
     try std.testing.expectEqual(@as(i64, 0), t.delete(0).?);
     try std.testing.expectEqual(@as(usize, 0), t.len());
+}
+
+test "tree example usage" {
+    var gpa = std.heap.GeneralPurposeAllocator(.{}){};
+    defer _ = gpa.detectLeaks();
+    const TreeType = lib.TreeWithOptions(i64, i64, i64Cmp, .{ .countChildren = true });
+    var t = TreeType.init(gpa.allocator());
+    defer t.deinit();
+    var i: i64 = 10;
+    while (i >= 0) {
+        _ = try t.insert(i, i);
+        i -= 1;
+    }
+    if (t.getMin().?.k != 0) {
+        @panic("bad min");
+    }
+    if (t.getMax().?.k != 10) {
+        @panic("bad max");
+    }
+    if (t.get(5).?.* != 5) {
+        @panic("invalid get result");
+    }
+    var it = t.ascendFromStart();
+    i = 0;
+    while (it.value()) |e| {
+        if (e.k != i) {
+            @panic("invalid key");
+        }
+        if (e.v.* != i) {
+            @panic("invalid value");
+        }
+        i += 1;
+        it.next();
+    }
 }
