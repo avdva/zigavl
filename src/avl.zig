@@ -651,8 +651,11 @@ pub fn TreeWithOptions(comptime K: type, comptime V: type, comptime Cmp: fn (a: 
         // Time complexity:
         //	O(logn) - if children node counts are enabled.
         //	O(n) - otherwise.
-        pub fn deleteAt(self: *Self, pos: usize) void {
-            self.deleteLocation(self.locateAt(pos));
+        pub fn deleteAt(self: *Self, pos: usize) V {
+            var loc = self.locateAt(pos);
+            var v = loc.data().v;
+            self.deleteLocation(loc);
+            return v;
         }
 
         fn setRoot(self: *Self, loc: ?Location) void {
@@ -1154,7 +1157,7 @@ test "tree deleteAt" {
     i = 64;
     while (i < 128) {
         try std.testing.expectEqual(exp_len, t.len());
-        t.deleteAt(64);
+        _ = t.deleteAt(64);
         i += 1;
         exp_len -= 1;
     }
@@ -1162,7 +1165,7 @@ test "tree deleteAt" {
     i = 0;
     while (i < 64) {
         try std.testing.expectEqual(exp_len, t.len());
-        t.deleteAt(0);
+        _ = t.deleteAt(0);
         i += 1;
         exp_len -= 1;
     }
