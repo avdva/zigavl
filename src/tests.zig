@@ -14,10 +14,10 @@ test "test pub decls" {
     _ = try t.insert(0, 0);
     var it = t.ascendFromStart();
     var min = t.getMin().?;
-    try std.testing.expectEqual(it.next().?.k, min.k);
+    try std.testing.expectEqual(it.value().?.k, min.k);
     var max = t.getMax().?;
     it = t.descendFromEnd();
-    try std.testing.expectEqual(it.prev().?.k, max.k);
+    try std.testing.expectEqual(it.value().?.k, max.k);
     try std.testing.expectEqual(@as(i64, 0), t.at(0).k);
     try std.testing.expectEqual(@as(i64, 0), t.at(0).v.*);
     try std.testing.expectEqual(@as(i64, 0), t.delete(0).?);
