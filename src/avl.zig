@@ -368,24 +368,26 @@ pub fn TreeWithOptions(comptime K: type, comptime V: type, comptime Cmp: fn (a: 
                 };
             }
 
-            pub fn next(self: *Iterator) ?Entry {
-                var l = self.loc orelse return null;
-                var e = Entry{
-                    .k = l.data().k,
-                    .v = &l.data().v,
-                };
-                self.loc = nextInOrderLocation(l);
-                return e;
+            pub fn next(self: *Iterator) void {
+                if (self.loc) |l| {
+                    self.loc = nextInOrderLocation(l);
+                }
             }
 
-            pub fn prev(self: *Iterator) ?Entry {
-                var l = self.loc orelse return null;
-                var e = Entry{
-                    .k = l.data().k,
-                    .v = &l.data().v,
-                };
-                self.loc = prevInOrderLocation(l);
-                return e;
+            pub fn prev(self: *Iterator) void {
+                if (self.loc) |l| {
+                    self.loc = prevInOrderLocation(l);
+                }
+            }
+
+            pub fn value(self: *Iterator) ?Entry {
+                if (self.loc) |l| {
+                    return Entry{
+                        .k = l.data().k,
+                        .v = &l.data().v,
+                    };
+                }
+                return null;
             }
         };
 
@@ -878,8 +880,7 @@ test "empty tree" {
     defer t.deinit();
 
     var it = t.ascendFromStart();
-    var e = it.next();
-    try std.testing.expect(e == null);
+    try std.testing.expectEqual(@as(?TreeType.Entry, null), it.value());
 
     try std.testing.expect(t.delete(0) == null);
 }
@@ -1183,22 +1184,24 @@ test "tree iterator" {
     var it = t.ascendFromStart();
     i = 0;
     while (i < 128) {
-        var e = it.next();
+        var e = it.value();
         try std.testing.expectEqual(i, e.?.k);
         try std.testing.expectEqual(i, e.?.v.*);
+        it.next();
         i += 1;
     }
-    try std.testing.expectEqual(@as(?TreeType.Entry, null), it.next());
+    try std.testing.expectEqual(@as(?TreeType.Entry, null), it.value());
 
     it = t.descendFromEnd();
     i = 127;
     while (i >= 0) {
-        var e = it.prev();
+        var e = it.value();
         try std.testing.expectEqual(i, e.?.k);
         try std.testing.expectEqual(i, e.?.v.*);
+        it.prev();
         i -= 1;
     }
-    try std.testing.expectEqual(@as(?TreeType.Entry, null), it.next());
+    try std.testing.expectEqual(@as(?TreeType.Entry, null), it.value());
 }
 
 test "tree random" {
