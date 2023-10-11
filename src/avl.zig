@@ -397,7 +397,7 @@ pub fn TreeWithOptions(comptime K: type, comptime V: type, comptime Cmp: fn (a: 
         min: ?Location,
         max: ?Location,
 
-        // init itializes the tree.
+        // init initializes the tree.
         pub fn init(a: std.mem.Allocator) Self {
             return Self{
                 .lc = Cache.init(a),
@@ -426,7 +426,7 @@ pub fn TreeWithOptions(comptime K: type, comptime V: type, comptime Cmp: fn (a: 
 
         // InsertResult is returned from any function that inserts data to the tree.
         //  inserted == true if a new node was added to the tree.
-        //  v - a pointer to the data, extisting before the call, or the newly added.
+        //  v - a pointer to the data, existing before the call, or the newly added.
         pub const InsertResult = struct {
             inserted: bool,
             v: *V,
@@ -646,16 +646,25 @@ pub fn TreeWithOptions(comptime K: type, comptime V: type, comptime Cmp: fn (a: 
             };
         }
 
+        // KV is a key-value pair.
+        pub const KV = struct {
+            Key: K,
+            Value: V,
+        };
+
         // deleteAt deletes a node at the given position.
         // Panics if position >= tree.Len().
         // Time complexity:
         //	O(logn) - if children node counts are enabled.
         //	O(n) - otherwise.
-        pub fn deleteAt(self: *Self, pos: usize) V {
+        pub fn deleteAt(self: *Self, pos: usize) KV {
             var loc = self.locateAt(pos);
-            var v = loc.data().v;
+            var kv = KV{
+                .Key = loc.data().k,
+                .Value = loc.data().v,
+            };
             self.deleteLocation(loc);
-            return v;
+            return kv;
         }
 
         fn setRoot(self: *Self, loc: ?Location) void {
@@ -839,7 +848,7 @@ pub fn TreeWithOptions(comptime K: type, comptime V: type, comptime Cmp: fn (a: 
             return result;
         }
 
-        fn shouldLocateAtLineary(self: *Self, pos: usize) bool {
+        fn shouldLocateAtLinearly(self: *Self, pos: usize) bool {
             var p = @min(pos, self.length - pos - 1);
             return p <= 8;
         }
@@ -848,7 +857,7 @@ pub fn TreeWithOptions(comptime K: type, comptime V: type, comptime Cmp: fn (a: 
             if (pos >= self.len()) {
                 @panic("index out of range");
             }
-            if (!options.countChildren or self.shouldLocateAtLineary(pos)) {
+            if (!options.countChildren or self.shouldLocateAtLinearly(pos)) {
                 if (pos < self.length / 2) {
                     return advance(self.min.?, @as(isize, @intCast(pos)));
                 }
@@ -1157,7 +1166,9 @@ test "tree deleteAt" {
     i = 64;
     while (i < 128) {
         try std.testing.expectEqual(exp_len, t.len());
-        _ = t.deleteAt(64);
+        var kv = t.deleteAt(64);
+        try std.testing.expectEqual(i, kv.Key);
+        try std.testing.expectEqual(i, kv.Value);
         i += 1;
         exp_len -= 1;
     }
@@ -1165,7 +1176,9 @@ test "tree deleteAt" {
     i = 0;
     while (i < 64) {
         try std.testing.expectEqual(exp_len, t.len());
-        _ = t.deleteAt(0);
+        var kv = t.deleteAt(0);
+        try std.testing.expectEqual(i, kv.Key);
+        try std.testing.expectEqual(i, kv.Value);
         i += 1;
         exp_len -= 1;
     }

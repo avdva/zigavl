@@ -28,7 +28,7 @@ pub fn get(self: *Self, k: K) ?*V
 
 // array-style access:
 pub fn at(self: *Self, pos: usize) Entry
-pub fn deleteAt(self: *Self, pos: usize) V
+pub fn deleteAt(self: *Self, pos: usize) KV
 
 // iterate:
 pub fn ascendFromStart(self: *Self) Iterator
