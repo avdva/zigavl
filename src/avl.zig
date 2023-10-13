@@ -1241,8 +1241,8 @@ test "tree iterator" {
     i = 0;
     while (i < 64) {
         var e = it.value();
-        try std.testing.expectEqual(i+64, e.?.k);
-        try std.testing.expectEqual(i+64, e.?.v.*);
+        try std.testing.expectEqual(i + 64, e.?.k);
+        try std.testing.expectEqual(i + 64, e.?.v.*);
         it = t.deleteIterator(it);
         i += 1;
     }
