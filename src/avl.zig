@@ -380,7 +380,7 @@ pub fn TreeWithOptions(comptime K: type, comptime V: type, comptime Cmp: fn (a: 
                 }
             }
 
-            pub fn value(self: *Iterator) ?Entry {
+            pub fn value(self: *const Iterator) ?Entry {
                 if (self.loc) |l| {
                     return Entry{
                         .k = l.data().k,
@@ -618,6 +618,18 @@ pub fn TreeWithOptions(comptime K: type, comptime V: type, comptime Cmp: fn (a: 
             return Iterator{
                 .tree = self,
                 .loc = self.max,
+            };
+        }
+
+        // deleteIterator deletes an iterator from the tree and returns
+        // an iterator to the next element.
+        pub fn deleteIterator(self: *Self, it: Iterator) Iterator {
+            var loc = it.loc orelse return it;
+            var next = nextInOrderLocation(loc);
+            self.deleteLocation(loc);
+            return Iterator{
+                .loc = next,
+                .tree = self,
             };
         }
 
@@ -1217,6 +1229,34 @@ test "tree iterator" {
         it.prev();
         i -= 1;
     }
+    try std.testing.expectEqual(@as(?TreeType.Entry, null), it.value());
+
+    it = t.ascendFromStart();
+    i = 0;
+    while (i < 64) {
+        try std.testing.expect(it.value() != null);
+        i += 1;
+        it.next();
+    }
+    i = 0;
+    while (i < 64) {
+        var e = it.value();
+        try std.testing.expectEqual(i+64, e.?.k);
+        try std.testing.expectEqual(i+64, e.?.v.*);
+        it = t.deleteIterator(it);
+        i += 1;
+    }
+
+    it = t.ascendFromStart();
+    i = 0;
+    while (i < 64) {
+        var e = it.value();
+        try std.testing.expectEqual(i, e.?.k);
+        try std.testing.expectEqual(i, e.?.v.*);
+        it = t.deleteIterator(it);
+        i += 1;
+    }
+
     try std.testing.expectEqual(@as(?TreeType.Entry, null), it.value());
 }
 

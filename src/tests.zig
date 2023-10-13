@@ -61,13 +61,18 @@ test "tree example usage" {
         i += 1;
         it.next();
     }
+    //delete iterator
+    var second_it = t.deleteIterator(t.ascendFromStart());
+    if (second_it.value().?.k != 1 or second_it.value().?.v.* != 1) {
+        @panic("invalid deleteIterator result");
+    }
     // delete by key
-    if (t.delete(0).? != 0) {
+    if (t.delete(1).? != 1) {
         @panic("invalid delete result");
     }
     // delete by position
     var kv = t.deleteAt(0);
-    if (kv.Key != 1 or kv.Value != 1) {
+    if (kv.Key != 2 or kv.Value != 2) {
         @panic("invalid deleteAt result");
     }
 }
