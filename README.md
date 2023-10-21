@@ -20,6 +20,7 @@ pub fn insert(self: *Self, k: K, v: V) !InsertResult
 
 // delete:
 pub fn delete(self: *Self, k: K) ?V
+pub fn deleteIterator(self: *Self, it: Iterator) Iterator
 
 // find:
 pub fn getMin(self: *Self) ?Entry
