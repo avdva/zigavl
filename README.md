@@ -15,8 +15,9 @@ pub fn init(a: std.mem.Allocator) Self
 pub fn deinit()
 
 // insert:
-pub fn getOrInsert(self: *Self, k: K, v: V) !InsertResult 
 pub fn insert(self: *Self, k: K, v: V) !InsertResult
+pub fn getOrInsert(self: *Self, k: K, v: V) !InsertResult 
+pub fn getOrEmplace(self: *Self, k: K, ctor: fn (v: *V, args: anytype) void, args: anytype) !InsertResult
 
 // delete:
 pub fn delete(self: *Self, k: K) ?V

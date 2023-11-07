@@ -18,10 +18,10 @@ const direction = enum {
 fn makeNodeData(comptime K: type, comptime V: type, comptime Tags: type) type {
     return struct {
         const Self = @This();
-        k: K,
-        v: V,
-        h: u8,
-        tags: Tags,
+        k: K = undefined,
+        v: V = undefined,
+        tags: Tags = undefined,
+        h: u8 = 0,
 
         fn setHeight(self: *Self, h: u8) bool {
             var old = self.h;
@@ -41,14 +41,9 @@ fn makeNode(comptime K: type, comptime V: type, comptime L: type, comptime Tags:
         right: ?L,
         parent: ?L,
 
-        fn init(k: K, v: V, tags: Tags) Self {
+        fn init() Self {
             return Self{
-                .data = NodeData{
-                    .k = k,
-                    .v = v,
-                    .h = 0,
-                    .tags = tags,
-                },
+                .data = NodeData{},
                 .left = null,
                 .right = null,
                 .parent = null,
@@ -140,9 +135,9 @@ fn locationCache(comptime K: type, comptime V: type, comptime Tags: type) type {
             };
         }
 
-        fn create(self: *Self, k: K, v: V, tags: Tags) !Location {
+        fn create(self: *Self) !Location {
             var node = try self.a.create(Location.Node);
-            node.* = Location.Node.init(k, v, tags);
+            node.* = Location.Node.init();
             return Location.init(node);
         }
 
@@ -424,6 +419,19 @@ pub fn TreeWithOptions(comptime K: type, comptime V: type, comptime Cmp: fn (a: 
             return self.length;
         }
 
+        fn createNewNode(self: *Self, k: ?K, v: ?V) !Location {
+            var new_loc = try self.lc.create();
+            var data_ptr = new_loc.data();
+            data_ptr.*.tags = .{};
+            if (k) |kVal| {
+                data_ptr.*.k = kVal;
+            }
+            if (v) |vVal| {
+                data_ptr.*.v = vVal;
+            }
+            return new_loc;
+        }
+
         // InsertResult is returned from any function that inserts data to the tree.
         //  inserted == true if a new node was added to the tree.
         //  v - a pointer to the data, existing before the call, or the newly added.
@@ -432,7 +440,30 @@ pub fn TreeWithOptions(comptime K: type, comptime V: type, comptime Cmp: fn (a: 
             v: *V,
         };
 
-        // getOrInsert inserts new kv pair into the tree if tke key is not present.
+        // getOrEmplace inserts a new kv pair into the tree.
+        //  - if tree already contains 'k', the function returns InsertResult{.inserted = false, .v = ptr_to_existing_value}
+        //  - otherwise calls ctor with given args to initialise a newly created value.
+        // Time complexity: O(logn).
+        pub fn getOrEmplace(self: *Self, k: K, ctor: fn (v: *V, args: anytype) void, args: anytype) !InsertResult {
+            var res = self.locate(k);
+            if (res.loc) |l| {
+                if (res.dir == .center) {
+                    return InsertResult{
+                        .inserted = false,
+                        .v = &l.data().v,
+                    };
+                }
+            }
+            var new_loc = try self.createNewNode(k, null);
+            ctor(&new_loc.data().*.v, args);
+            self.insertNew(res, new_loc);
+            return InsertResult{
+                .inserted = true,
+                .v = &new_loc.data().v,
+            };
+        }
+
+        // getOrInsert inserts a new kv pair into the tree if tke key is not present.
         // Time complexity: O(logn).
         pub fn getOrInsert(self: *Self, k: K, v: V) !InsertResult {
             return self.doInsert(k, v, false);
@@ -458,24 +489,24 @@ pub fn TreeWithOptions(comptime K: type, comptime V: type, comptime Cmp: fn (a: 
                     };
                 }
             }
-            var loc = try self.insertNew(res, k, v);
+            var new_loc = try self.createNewNode(k, v);
+            self.insertNew(res, new_loc);
             return InsertResult{
                 .inserted = true,
-                .v = &loc.data().v,
+                .v = &new_loc.data().v,
             };
         }
 
-        fn insertNew(self: *Self, where: LocateResult, k: K, v: V) !Location {
-            var new_node = try self.lc.create(k, v, .{});
+        fn insertNew(self: *Self, where: LocateResult, new_loc: Location) void {
             self.length += 1;
             switch (where.dir) {
                 .left, .right => {
                     var l = where.loc orelse unreachable;
-                    reparent(l, where.dir, new_node);
+                    reparent(l, where.dir, new_loc);
                     if (where.dir == .left and l.eq(self.min.?)) {
-                        self.min = new_node;
+                        self.min = new_loc;
                     } else if (where.dir == .right and l.eq(self.max.?)) {
-                        self.max = new_node;
+                        self.max = new_loc;
                     }
                     if (l.recalcHeight()) {
                         if (options.countChildren) {
@@ -489,12 +520,11 @@ pub fn TreeWithOptions(comptime K: type, comptime V: type, comptime Cmp: fn (a: 
                     }
                 },
                 .center => {
-                    self.root = new_node;
-                    self.min = new_node;
-                    self.max = new_node;
+                    self.root = new_loc;
+                    self.min = new_loc;
+                    self.max = new_loc;
                 },
             }
-            return new_node;
         }
 
         fn deleteLocation(self: *Self, loc: Location) void {
@@ -927,6 +957,48 @@ test "tree getOrInsert" {
     try std.testing.expectEqual(@as(i64, 2), t.get(2).?.*);
     ir.v.* = 3;
     try std.testing.expectEqual(@as(i64, 3), t.get(2).?.*);
+}
+
+test "tree getOrEmplace" {
+    var a = std.testing.allocator;
+    const TreeType = Tree(i64, i64, i64Cmp);
+    var t = TreeType.init(a);
+    defer t.deinit();
+    var i: i64 = 0;
+    const ctor = struct {
+        fn ctor(ptr: *i64, args: anytype) void {
+            ptr.* = args;
+        }
+    }.ctor;
+    while (i < 128) {
+        var ir = try t.getOrEmplace(i, ctor, i);
+        try std.testing.expect(ir.inserted);
+        try std.testing.expectEqual(i, ir.v.*);
+        try checkHeightAndBalance(
+            i64,
+            i64,
+            TreeType.Location,
+            TreeType.Comparer,
+            t.root,
+        );
+        i += 1;
+    }
+
+    i = 0;
+    while (i < 128) {
+        var v = t.get(i);
+        try std.testing.expect(v != null);
+        try std.testing.expectEqual(i, v.?.*);
+        i += 1;
+    }
+
+    i = 0;
+    while (i < 128) {
+        var ir = try t.getOrEmplace(i, ctor, i * 2);
+        try std.testing.expect(!ir.inserted);
+        try std.testing.expectEqual(i, ir.v.*);
+        i += 1;
+    }
 }
 
 test "tree insert" {
