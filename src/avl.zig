@@ -688,6 +688,19 @@ pub fn TreeWithOptions(comptime K: type, comptime V: type, comptime Cmp: fn (a: 
             };
         }
 
+        // ascendAt returns an iterator pointing to the ith element.
+        // Panics if position >= tree.Len().
+        // Time complexity:
+        //	O(logn) - if children node counts are enabled.
+        //	O(n) - otherwise.
+        pub fn ascendAt(self: *Self, pos: usize) Iterator {
+            var loc = self.locateAt(pos);
+            return Iterator{
+                .tree = self,
+                .loc = loc,
+            };
+        }
+
         // KV is a key-value pair.
         pub const KV = struct {
             Key: K,
@@ -1330,6 +1343,45 @@ test "tree iterator" {
     }
 
     try std.testing.expectEqual(@as(?TreeType.Entry, null), it.value());
+}
+
+test "tree ascendAt" {
+    var a = std.testing.allocator;
+    const TreeType = TreeWithOptions(i64, i64, i64Cmp, .{ .countChildren = true });
+    var t = TreeType.init(a);
+    defer t.deinit();
+
+    var i: i64 = 0;
+    while (i < 128) {
+        var ir = try t.insert(i, i);
+        try std.testing.expect(ir.inserted);
+        i += 1;
+    }
+    i = 0;
+    while (i < 128) {
+        var it = t.ascendAt(@as(usize, @intCast(i)));
+        var e = it.value();
+        try std.testing.expectEqual(i, e.?.k);
+        try std.testing.expectEqual(i, e.?.v.*);
+        var j = i - 1;
+        while (j >= 0) {
+            it.prev();
+            e = it.value();
+            try std.testing.expectEqual(j, e.?.k);
+            try std.testing.expectEqual(j, e.?.v.*);
+            j -= 1;
+        }
+        it = t.ascendAt(@as(usize, @intCast(i)));
+        j = i + 1;
+        while (j < t.len()) {
+            it.next();
+            e = it.value();
+            try std.testing.expectEqual(j, e.?.k);
+            try std.testing.expectEqual(j, e.?.v.*);
+            j += 1;
+        }
+        i += 1;
+    }
 }
 
 test "tree random" {
