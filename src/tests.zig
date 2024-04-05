@@ -75,4 +75,14 @@ test "tree example usage" {
     if (kv.Key != 2 or kv.Value != 2) {
         @panic("invalid deleteAt result");
     }
+
+    // ascend from pos.
+    it = t.ascendAt(3);
+    if (it.value()) |val| {
+        if (val.k != 6) {
+            @panic("invalid key");
+        }
+    } else {
+        @panic("invalid iterator");
+    }
 }
