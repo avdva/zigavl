@@ -14,8 +14,7 @@ pub fn build(b: *std.Build) void {
     });
 
     _ = b.addModule(package_name, .{
-        .source_file = .{ .path = package_path },
-        .dependencies = &.{},
+        .root_source_file = .{ .path = package_path },
     });
 
     b.installArtifact(lib);
