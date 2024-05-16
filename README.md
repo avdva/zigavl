@@ -1,6 +1,9 @@
 # zigavl
 A self-balancing binary [AVL](https://en.wikipedia.org/wiki/AVL_tree) tree written in Zig.
 
+# Presentation
+To use this library, you need at least Zig 0.13.x.
+
 ## Badges
 
 ![Build Status](https://img.shields.io/github/actions/workflow/status/ultd/base58-zig/test.yml?branch=main)

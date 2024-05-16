@@ -7,15 +7,15 @@ fn i64Cmp(a: i64, b: i64) math.Order {
 }
 
 test "test pub decls" {
-    var a = std.testing.allocator;
+    const a = std.testing.allocator;
     const TreeType = lib.Tree(i64, i64, i64Cmp);
     var t = TreeType.init(a);
     defer t.deinit();
     _ = try t.insert(0, 0);
     var it = t.ascendFromStart();
-    var min = t.getMin().?;
+    const min = t.getMin().?;
     try std.testing.expectEqual(it.value().?.k, min.k);
-    var max = t.getMax().?;
+    const max = t.getMax().?;
     it = t.descendFromEnd();
     try std.testing.expectEqual(it.value().?.k, max.k);
     try std.testing.expectEqual(@as(i64, 0), t.at(0).k);
@@ -71,7 +71,7 @@ test "tree example usage" {
         @panic("invalid delete result");
     }
     // delete by position
-    var kv = t.deleteAt(0);
+    const kv = t.deleteAt(0);
     if (kv.Key != 2 or kv.Value != 2) {
         @panic("invalid deleteAt result");
     }

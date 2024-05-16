@@ -8,20 +8,19 @@ pub fn build(b: *std.Build) void {
 
     const lib = b.addStaticLibrary(.{
         .name = package_name,
-        .root_source_file = .{ .path = package_path },
+        .root_source_file = .{ .src_path = .{ .owner = b,  .sub_path = package_path }},
         .target = target,
         .optimize = optimize,
     });
 
     _ = b.addModule(package_name, .{
-        .source_file = .{ .path = package_path },
-        .dependencies = &.{},
+        .root_source_file = .{ .src_path = .{ .owner = b,  .sub_path = package_path }},
     });
 
     b.installArtifact(lib);
 
     const main_tests = b.addTest(.{
-        .root_source_file = .{ .path = "src/tests.zig" },
+        .root_source_file = .{ .src_path = .{ .owner = b,  .sub_path = "src/tests.zig" }},
         .target = target,
         .optimize = optimize,
     });
