@@ -8,9 +8,9 @@ const direction = enum {
 
     fn invert(self: direction) direction {
         switch (self) {
-        .left => return .right,
-        .right => return .left,
-        .center => return .center,
+            .left => return .right,
+            .right => return .left,
+            .center => return .center,
         }
     }
 };
@@ -76,17 +76,17 @@ fn makePtrLocationType(comptime K: type, comptime V: type, comptime Tags: type) 
 
         fn child(self: *const Self, comptime dir: direction) ?Self {
             switch (dir) {
-            .left => return self.ptr.*.left,
-            .right => return self.ptr.*.right,
-            else => unreachable,
+                .left => return self.ptr.*.left,
+                .right => return self.ptr.*.right,
+                else => unreachable,
             }
         }
 
         fn setChild(self: *Self, comptime dir: direction, loc: ?Self) void {
             switch (dir) {
-            .left => self.ptr.*.left = loc,
-            .right => self.ptr.*.right = loc,
-            else => unreachable,
+                .left => self.ptr.*.left = loc,
+                .right => self.ptr.*.right = loc,
+                else => unreachable,
             }
         }
 
@@ -152,7 +152,7 @@ pub const Options = struct {
     // countChildren, if set, enables children counts for every node of the tree.
     // the number of children allows to locate a node by its position with a guaranteed complexity O(logn).
     countChildren: bool = false,
-    };
+};
 
 // Tree is a generic avl tree.
 // AVL tree (https://en.wikipedia.org/wiki/AVL_tree) is a self-balancing binary search tree.
@@ -170,9 +170,9 @@ pub fn TreeWithOptions(comptime K: type, comptime V: type, comptime Cmp: fn (a: 
     return struct {
         const Self = @This();
         const Tags = if (options.countChildren)
-        struct { childrenCount: u32 = 0 }
+            struct { childrenCount: u32 = 0 }
         else
-        struct {};
+            struct {};
 
         const Cache = locationCache(K, V, Tags);
         const Location = Cache.Location;
@@ -181,12 +181,12 @@ pub fn TreeWithOptions(comptime K: type, comptime V: type, comptime Cmp: fn (a: 
         const LocateResult = struct {
             loc: ?Location,
             dir: direction,
-            };
+        };
 
         pub const Entry = struct {
             k: K,
             v: *V,
-            };
+        };
 
         fn goLeft(loc: Location) Location {
             var l = loc;
@@ -200,7 +200,7 @@ pub fn TreeWithOptions(comptime K: type, comptime V: type, comptime Cmp: fn (a: 
         fn goRight(loc: Location) Location {
             var r = loc;
             while (true) {
-                const  right = r.child(.right) orelse break;
+                const right = r.child(.right) orelse break;
                 r = right;
             }
             return r;
@@ -261,12 +261,12 @@ pub fn TreeWithOptions(comptime K: type, comptime V: type, comptime Cmp: fn (a: 
             var parent = l.parent() orelse return null;
             const dir = childDir(parent, l);
             switch (dir) {
-            .left => {
-                const right = parent.child(.right) orelse return parent;
-                return goLeftRight(right);
-            },
-            .right => return parent,
-            else => unreachable,
+                .left => {
+                    const right = parent.child(.right) orelse return parent;
+                    return goLeftRight(right);
+                },
+                .right => return parent,
+                else => unreachable,
             }
         }
 
@@ -296,18 +296,18 @@ pub fn TreeWithOptions(comptime K: type, comptime V: type, comptime Cmp: fn (a: 
 
         fn childAt(loc: Location, dir: direction) ?Location {
             switch (dir) {
-            .left => return loc.child(.left),
-            .right => return loc.child(.right),
-            else => unreachable,
+                .left => return loc.child(.left),
+                .right => return loc.child(.right),
+                else => unreachable,
             }
         }
 
         fn setChildAt(parent: Location, dir: direction, child: ?Location) void {
             var p = parent;
             switch (dir) {
-            .left => p.setChild(.left, child),
-            .right => p.setChild(.right, child),
-            else => unreachable,
+                .left => p.setChild(.left, child),
+                .right => p.setChild(.right, child),
+                else => unreachable,
             }
         }
 
@@ -407,7 +407,7 @@ pub fn TreeWithOptions(comptime K: type, comptime V: type, comptime Cmp: fn (a: 
             const min = self.min orelse return;
             var loc = goLeftRight(min);
             while (true) {
-                const  l = loc orelse break;
+                const l = loc orelse break;
                 const next = nextPostOrderLocation(l);
                 self.lc.destroy(l);
                 loc = next;
@@ -438,7 +438,7 @@ pub fn TreeWithOptions(comptime K: type, comptime V: type, comptime Cmp: fn (a: 
         pub const InsertResult = struct {
             inserted: bool,
             v: *V,
-            };
+        };
 
         // getOrEmplace inserts a new kv pair into the tree.
         //  - if tree already contains 'k', the function returns InsertResult{.inserted = false, .v = ptr_to_existing_value}
@@ -500,30 +500,30 @@ pub fn TreeWithOptions(comptime K: type, comptime V: type, comptime Cmp: fn (a: 
         fn insertNew(self: *Self, where: LocateResult, new_loc: Location) void {
             self.length += 1;
             switch (where.dir) {
-            .left, .right => {
-                var l = where.loc orelse unreachable;
-                reparent(l, where.dir, new_loc);
-                if (where.dir == .left and l.eq(self.min.?)) {
+                .left, .right => {
+                    var l = where.loc orelse unreachable;
+                    reparent(l, where.dir, new_loc);
+                    if (where.dir == .left and l.eq(self.min.?)) {
+                        self.min = new_loc;
+                    } else if (where.dir == .right and l.eq(self.max.?)) {
+                        self.max = new_loc;
+                    }
+                    if (l.recalcHeight()) {
+                        if (options.countChildren) {
+                            recalcCounts(l);
+                        }
+                        self.checkBalance(l.parent(), false);
+                    } else {
+                        if (options.countChildren) {
+                            updateCounts(l);
+                        }
+                    }
+                },
+                .center => {
+                    self.root = new_loc;
                     self.min = new_loc;
-                } else if (where.dir == .right and l.eq(self.max.?)) {
                     self.max = new_loc;
-                }
-                if (l.recalcHeight()) {
-                    if (options.countChildren) {
-                        recalcCounts(l);
-                    }
-                    self.checkBalance(l.parent(), false);
-                } else {
-                    if (options.countChildren) {
-                        updateCounts(l);
-                    }
-                }
-            },
-            .center => {
-                self.root = new_loc;
-                self.min = new_loc;
-                self.max = new_loc;
-            },
+                },
             }
         }
 
@@ -678,8 +678,8 @@ pub fn TreeWithOptions(comptime K: type, comptime V: type, comptime Cmp: fn (a: 
         // at returns a an entry at the ith position of the sorted array.
         // Panics if position >= tree.Len().
         // Time complexity:
-        //	O(logn) - if children node counts are enabled.
-        //	O(n) - otherwise.
+        //> O(logn) - if children node counts are enabled.
+        //> O(n) - otherwise.
         pub fn at(self: *Self, pos: usize) Entry {
             var loc = self.locateAt(pos);
             return Entry{
@@ -691,8 +691,8 @@ pub fn TreeWithOptions(comptime K: type, comptime V: type, comptime Cmp: fn (a: 
         // ascendAt returns an iterator pointing to the ith element.
         // Panics if position >= tree.Len().
         // Time complexity:
-        //	O(logn) - if children node counts are enabled.
-        //	O(n) - otherwise.
+        //> O(logn) - if children node counts are enabled.
+        //> O(n) - otherwise.
         pub fn ascendAt(self: *Self, pos: usize) Iterator {
             const loc = self.locateAt(pos);
             return Iterator{
@@ -705,13 +705,13 @@ pub fn TreeWithOptions(comptime K: type, comptime V: type, comptime Cmp: fn (a: 
         pub const KV = struct {
             Key: K,
             Value: V,
-            };
+        };
 
         // deleteAt deletes a node at the given position.
         // Panics if position >= tree.Len().
         // Time complexity:
-        //	O(logn) - if children node counts are enabled.
-        //	O(n) - otherwise.
+        //> O(logn) - if children node counts are enabled.
+        //> O(n) - otherwise.
         pub fn deleteAt(self: *Self, pos: usize) KV {
             var loc = self.locateAt(pos);
             const kv = KV{
@@ -736,31 +736,31 @@ pub fn TreeWithOptions(comptime K: type, comptime V: type, comptime Cmp: fn (a: 
                 const heightChanged = l.recalcHeight();
                 const parent = l.parent();
                 switch (l.balance()) {
-                -2 => {
-                    switch (l.child(.left).?.balance()) {
-                    -1, 0 => self.rr(l),
-                    1 => self.lr(l),
-                    else => unreachable,
-                    }
-                },
-                2 => {
-                    switch (l.child(.right).?.balance()) {
-                    -1 => self.rl(l),
-                    0, 1 => self.ll(l),
-                    else => unreachable,
-                    }
-                },
-                else => {
-                    if (!heightChanged and !all_way_up) {
-                        if (options.countChildren) {
-                            updateCounts(l);
+                    -2 => {
+                        switch (l.child(.left).?.balance()) {
+                            -1, 0 => self.rr(l),
+                            1 => self.lr(l),
+                            else => unreachable,
                         }
-                        return;
-                    }
-                    if (options.countChildren) {
-                        recalcCounts(l);
-                    }
-                },
+                    },
+                    2 => {
+                        switch (l.child(.right).?.balance()) {
+                            -1 => self.rl(l),
+                            0, 1 => self.ll(l),
+                            else => unreachable,
+                        }
+                    },
+                    else => {
+                        if (!heightChanged and !all_way_up) {
+                            if (options.countChildren) {
+                                updateCounts(l);
+                            }
+                            return;
+                        }
+                        if (options.countChildren) {
+                            recalcCounts(l);
+                        }
+                    },
                 }
                 mutLoc = parent;
             }
@@ -882,18 +882,18 @@ pub fn TreeWithOptions(comptime K: type, comptime V: type, comptime Cmp: fn (a: 
                 var l = result.loc orelse break;
                 var next: ?Location = null;
                 switch (Comparer(k, l.data().k)) {
-                .lt => {
-                    next = l.child(.left);
-                    result.dir = .left;
-                },
-                .eq => {
-                    result.dir = .center;
-                    return result;
-                },
-                .gt => {
-                    next = l.child(.right);
-                    result.dir = .right;
-                },
+                    .lt => {
+                        next = l.child(.left);
+                        result.dir = .left;
+                    },
+                    .eq => {
+                        result.dir = .center;
+                        return result;
+                    },
+                    .gt => {
+                        next = l.child(.right);
+                        result.dir = .right;
+                    },
                 }
                 if (next == null) {
                     break;
@@ -904,7 +904,7 @@ pub fn TreeWithOptions(comptime K: type, comptime V: type, comptime Cmp: fn (a: 
         }
 
         fn shouldLocateAtLinearly(self: *Self, pos: usize) bool {
-            const  p = @min(pos, self.length - pos - 1);
+            const p = @min(pos, self.length - pos - 1);
             return p <= 8;
         }
 
@@ -982,17 +982,17 @@ test "tree getOrEmplace" {
         fn ctor(ptr: *i64, args: anytype) void {
             ptr.* = args;
         }
-        }.ctor;
+    }.ctor;
     while (i < 128) {
         const ir = try t.getOrEmplace(i, ctor, i);
         try std.testing.expect(ir.inserted);
         try std.testing.expectEqual(i, ir.v.*);
         try checkHeightAndBalance(
-                i64,
-                i64,
-                TreeType.Location,
-                TreeType.Comparer,
-                t.root,
+            i64,
+            i64,
+            TreeType.Location,
+            TreeType.Comparer,
+            t.root,
         );
         i += 1;
     }
@@ -1037,11 +1037,11 @@ test "tree insert" {
         try std.testing.expectEqual(i, max.?.v.*);
 
         try checkHeightAndBalance(
-                i64,
-                i64,
-                TreeType.Location,
-                TreeType.Comparer,
-                t.root,
+            i64,
+            i64,
+            TreeType.Location,
+            TreeType.Comparer,
+            t.root,
         );
 
         i += 1;
@@ -1061,11 +1061,11 @@ test "tree insert" {
         try std.testing.expect(!ir.inserted);
         try std.testing.expectEqual(i * 2, ir.v.*);
         try checkHeightAndBalance(
-                i64,
-                i64,
-                TreeType.Location,
-                TreeType.Comparer,
-                t.root,
+            i64,
+            i64,
+            TreeType.Location,
+            TreeType.Comparer,
+            t.root,
         );
         i -= 1;
     }
@@ -1449,7 +1449,7 @@ fn recalcHeightAndBalance(comptime K: type, comptime V: type, comptime L: type, 
     try std.testing.expectEqual(result.height, l.data().h);
     if (l.balance() < -1 or l.balance() > 1) {
         return error{
-        InvalidBalance,
+            InvalidBalance,
         }.InvalidBalance;
     }
     return result;
