@@ -636,6 +636,7 @@ pub fn TreeWithOptions(comptime K: type, comptime V: type, comptime Cmp: fn (a: 
         }
 
         // ascendFromStart returns an iterator pointing to the first element.
+        // Time complexity: O(1).
         pub fn ascendFromStart(self: *Self) Iterator {
             return Iterator{
                 .tree = self,
@@ -644,6 +645,7 @@ pub fn TreeWithOptions(comptime K: type, comptime V: type, comptime Cmp: fn (a: 
         }
 
         // descendFromEnd returns an iterator pointing to the last element.
+        // Time complexity: O(1).
         pub fn descendFromEnd(self: *Self) Iterator {
             return Iterator{
                 .tree = self,
@@ -678,8 +680,8 @@ pub fn TreeWithOptions(comptime K: type, comptime V: type, comptime Cmp: fn (a: 
         // at returns a an entry at the ith position of the sorted array.
         // Panics if position >= tree.Len().
         // Time complexity:
-        //> O(logn) - if children node counts are enabled.
-        //> O(n) - otherwise.
+        //  O(logn) - if children node counts are enabled.
+        //  O(n) - otherwise.
         pub fn at(self: *Self, pos: usize) Entry {
             var loc = self.locateAt(pos);
             return Entry{
@@ -691,8 +693,8 @@ pub fn TreeWithOptions(comptime K: type, comptime V: type, comptime Cmp: fn (a: 
         // ascendAt returns an iterator pointing to the ith element.
         // Panics if position >= tree.Len().
         // Time complexity:
-        //> O(logn) - if children node counts are enabled.
-        //> O(n) - otherwise.
+        //  O(logn) - if children node counts are enabled.
+        //  O(n) - otherwise.
         pub fn ascendAt(self: *Self, pos: usize) Iterator {
             const loc = self.locateAt(pos);
             return Iterator{
@@ -710,8 +712,8 @@ pub fn TreeWithOptions(comptime K: type, comptime V: type, comptime Cmp: fn (a: 
         // deleteAt deletes a node at the given position.
         // Panics if position >= tree.Len().
         // Time complexity:
-        //> O(logn) - if children node counts are enabled.
-        //> O(n) - otherwise.
+        //  O(logn) - if children node counts are enabled.
+        //  O(n) - otherwise.
         pub fn deleteAt(self: *Self, pos: usize) KV {
             var loc = self.locateAt(pos);
             const kv = KV{

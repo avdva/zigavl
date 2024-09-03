@@ -37,6 +37,7 @@ pub fn deleteAt(self: *Self, pos: usize) KV
 
 // iterate:
 pub fn ascendFromStart(self: *Self) Iterator
+pub fn ascendAt(self: *Self, pos: usize) Iterator
 pub fn descendFromEnd(self: *Self) Iterator
 
 ```
