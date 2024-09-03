@@ -80,7 +80,7 @@ pub fn main() !void {
         i += 1;
         it.next();
     }
-    // delete via iterator
+    //delete iterator
     var second_it = t.deleteIterator(t.ascendFromStart());
     if (second_it.value().?.k != 1 or second_it.value().?.v.* != 1) {
         @panic("invalid deleteIterator result");
@@ -90,9 +90,19 @@ pub fn main() !void {
         @panic("invalid delete result");
     }
     // delete by position
-    var kv = t.deleteAt(0);
+    const kv = t.deleteAt(0);
     if (kv.Key != 2 or kv.Value != 2) {
         @panic("invalid deleteAt result");
+    }
+
+    // ascend from pos.
+    it = t.ascendAt(3);
+    if (it.value()) |val| {
+        if (val.k != 6) {
+            @panic("invalid key");
+        }
+    } else {
+        @panic("invalid iterator");
     }
 }
 
