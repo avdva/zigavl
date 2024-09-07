@@ -44,11 +44,20 @@ pub fn descendFromEnd(self: *Self) Iterator
 
 Example:
 ```zig
+
+const std = @import("std");
+const math = std.math;
+const zigavl = @import("zigavl");
+
+fn i64Cmp(a: i64, b: i64) math.Order {
+    return math.order(a, b);
+}
+
 pub fn main() !void {
     var gpa = std.heap.GeneralPurposeAllocator(.{}){};
     defer _ = gpa.detectLeaks();
     // first, create an i64-->i64 tree
-    const TreeType = lib.TreeWithOptions(i64, i64, i64Cmp, .{ .countChildren = true });
+    const TreeType = zigavl.TreeWithOptions(i64, i64, i64Cmp, .{ .countChildren = true });
     var t = TreeType.init(gpa.allocator());
     defer t.deinit();
     // add some elements
