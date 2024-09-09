@@ -599,16 +599,16 @@ pub fn TreeWithOptions(comptime K: type, comptime V: type, comptime Cmp: fn (a: 
             const right = loc.child(.right);
             if (left) |l| {
                 if (right) |r| {
-                    if (l.data().h <= r.data().h) {
+                    // Russell A. Brown, Optimized Deletion From an AVL Tree.
+                    // https://arxiv.org/pdf/2406.05162v5
+                    if (loc.balance() <= 0) {
                         return goRight(l);
                     }
                     return goLeft(r);
                 }
-                return goRight(l);
-            } else if (right) |r| {
-                return goLeft(r);
+                return left;
             }
-            return null;
+            return right;
         }
 
         // getMin returns the minimum element of the tree.
