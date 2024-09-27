@@ -318,9 +318,8 @@ pub fn TreeWithOptions(comptime K: type, comptime V: type, comptime Cmp: fn (a: 
 
         fn updateCounts(loc: Location) void {
             var mutLoc: ?Location = loc;
-            while (true) {
-                var l = mutLoc orelse break;
-                recalcCounts(l);
+            while (mutLoc) |*l| {
+                recalcCounts(l.*);
                 mutLoc = l.parent();
             }
         }
@@ -737,23 +736,23 @@ pub fn TreeWithOptions(comptime K: type, comptime V: type, comptime Cmp: fn (a: 
             var mutLoc = loc;
             while (mutLoc) |*l| {
                 const parent = l.parent();
-                switch (l.balance()) {
+                switch (balance(l.*)) {
                     -2 => {
-                        switch (l.*.child(.left).?.balance()) {
+                        switch (balance(l.*.child(.left).?)) {
                             -1, 0 => self.rr(l.*),
                             1 => self.lr(l.*),
                             else => unreachable,
                         }
                     },
                     2 => {
-                        switch (l.*.child(.right).?.balance()) {
+                        switch (balance(l.*.child(.right).?)) {
                             -1 => self.rl(l.*),
                             0, 1 => self.ll(l.*),
                             else => unreachable,
                         }
                     },
                     else => {
-                        if (!l.*.recalcHeight() and !all_way_up) {
+                        if (!recalcHeight(l.*) and !all_way_up) {
                             if (options.countChildren) {
                                 updateCounts(l.*);
                             }
