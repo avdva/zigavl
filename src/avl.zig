@@ -735,34 +735,32 @@ pub fn TreeWithOptions(comptime K: type, comptime V: type, comptime Cmp: fn (a: 
 
         fn checkBalance(self: *Self, loc: ?Location, all_way_up: bool) void {
             var mutLoc = loc;
-            while (true) {
-                var l = mutLoc orelse break;
-                const heightChanged = recalcHeight(l);
+            while (mutLoc) |*l| {
                 const parent = l.parent();
-                switch (balance(l)) {
+                switch (l.balance()) {
                     -2 => {
-                        switch (balance(l.child(.left).?)) {
-                            -1, 0 => self.rr(l),
-                            1 => self.lr(l),
+                        switch (l.*.child(.left).?.balance()) {
+                            -1, 0 => self.rr(l.*),
+                            1 => self.lr(l.*),
                             else => unreachable,
                         }
                     },
                     2 => {
-                        switch (balance(l.child(.right).?)) {
-                            -1 => self.rl(l),
-                            0, 1 => self.ll(l),
+                        switch (l.*.child(.right).?.balance()) {
+                            -1 => self.rl(l.*),
+                            0, 1 => self.ll(l.*),
                             else => unreachable,
                         }
                     },
                     else => {
-                        if (!heightChanged and !all_way_up) {
+                        if (!l.*.recalcHeight() and !all_way_up) {
                             if (options.countChildren) {
-                                updateCounts(l);
+                                updateCounts(l.*);
                             }
                             return;
                         }
                         if (options.countChildren) {
-                            recalcCounts(l);
+                            recalcCounts(l.*);
                         }
                     },
                 }
