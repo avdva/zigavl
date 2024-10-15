@@ -108,9 +108,40 @@ fn locationCache(comptime K: type, comptime V: type, comptime Tags: type) type {
         a: std.mem.Allocator,
 
         fn init(a: std.mem.Allocator) Self {
+            //
+            //std.ArrayListAligned(comptime T: type, comptime alignment: ?u29)
+            //std.heap.FixedBufferAllocator
+            //  const f = aa.allocator().vtable.free;
+            // const f2 = a.vtable.free;
+            // if (f == f2) {
+            //    std.log.warn("sadsad", .{});
+            //}
             return Self{
                 .a = a,
             };
+        }
+
+        fn fastAllocators() [2]*const anyopaque {
+            comptime {
+                var aa: std.heap.ArenaAllocator = undefined;
+                const aaa = aa.allocator();
+                var fba: std.heap.FixedBufferAllocator = undefined;
+                const fbaa = fba.allocator();
+                return [_]*const anyopaque{
+                    @ptrCast(@alignCast(aaa.vtable.alloc)),
+                    @ptrCast(@alignCast(fbaa.vtable.alloc)),
+                };
+            }
+        }
+
+        const fastAllocAddrs = fastAllocators();
+
+        fn allowFastDeinit(self: *Self) bool {
+            const ourAllocAddr: *const anyopaque = @ptrCast(@alignCast(self.a.vtable.alloc));
+            inline for (fastAllocAddrs) |ptr| {
+                if (ourAllocAddr == ptr) return true;
+            }
+            return false;
         }
 
         fn create(self: *Self) !Location {
@@ -125,11 +156,16 @@ fn locationCache(comptime K: type, comptime V: type, comptime Tags: type) type {
     };
 }
 
-// Options defines some parameters of the tree.
+// Options defines some comptime parameters of the tree type.
 pub const Options = struct {
     // countChildren, if set, enables children counts for every node of the tree.
     // the number of children allows to locate a node by its position with a guaranteed complexity O(logn).
     countChildren: bool = false,
+};
+
+// InitOptions defines some runtime parameters of the tree instance.
+pub const InitOptions = struct {
+    allowFastDeinit: enum { always, auto, never } = .never,
 };
 
 // Tree is a generic avl tree.
@@ -387,24 +423,34 @@ pub fn TreeWithOptions(comptime K: type, comptime V: type, comptime Cmp: fn (a: 
             }
         };
 
+        io: InitOptions,
         lc: Cache,
-        length: usize,
-        root: ?Location,
-        min: ?Location,
-        max: ?Location,
+        length: usize = 0,
+        root: ?Location = null,
+        min: ?Location = null,
+        max: ?Location = null,
 
         // init initializes the tree.
         pub fn init(a: std.mem.Allocator) Self {
+            return Self.initWithOptions(a, .{});
+        }
+
+        // initWithOptions initializes the tree.
+        pub fn initWithOptions(a: std.mem.Allocator, io: InitOptions) Self {
             return Self{
                 .lc = Cache.init(a),
                 .length = 0,
                 .root = null,
                 .min = null,
                 .max = null,
+                .io = io,
             };
         }
 
         pub fn deinit(self: *Self) void {
+            if (self.io.allowFastDeinit == .always or self.io.allowFastDeinit == .auto and self.lc.allowFastDeinit()) {
+                return;
+            }
             const min = self.min orelse return;
             var loc = goLeftRight(min);
             while (true) {
@@ -1405,6 +1451,19 @@ test "tree random" {
         try std.testing.expectEqual(exp_len, t.len());
         i += 1;
     }
+}
+
+test "arena allocator" {
+    const a = std.testing.allocator;
+    var arena = std.heap.ArenaAllocator.init(a);
+    const aa = arena.allocator();
+    defer arena.deinit();
+    const TreeType = TreeWithOptions(i64, i64, i64Cmp, .{});
+    var t = TreeType.initWithOptions(aa, .{ .allowFastDeinit = .auto });
+    _ = try t.insert(0, 0);
+    _ = try t.insert(1, 1);
+    _ = try t.insert(2, 2);
+    defer t.deinit();
 }
 
 fn checkHeightAndBalance(comptime T: type, loc: ?T.Location) !void {
