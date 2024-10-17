@@ -10,11 +10,19 @@ To use this library, you need at least Zig 0.13.x.
 
 ## API
 ```zig
+// create tree type:
+pub const Options = struct {
+    countChildren: bool = false,
+};
 pub fn TreeWithOptions(comptime K: type, comptime V: type, comptime Cmp: fn (a: K, b: K) math.Order, comptime options: Options) type
 pub fn Tree(comptime K: type, comptime V: type, comptime Cmp: fn (a: K, b: K) math.Order) type
 
 // init/deinit:
+pub const InitOptions = struct {
+    allowFastDeinit: enum { always, auto, never } = .never,
+};
 pub fn init(a: std.mem.Allocator) Self
+pub fn initWithOptions(a: std.mem.Allocator, io: InitOptions) Self
 pub fn deinit()
 
 // insert:

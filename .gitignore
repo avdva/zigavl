@@ -2,3 +2,4 @@
 /zig-out
 /.vscode
 /.zig-cache
+*.code-workspace
