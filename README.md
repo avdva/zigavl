@@ -10,6 +10,7 @@ To use this library, you need at least Zig 0.13.x.
 
 ## API
 ```zig
+// create tree type:
 pub const Options = struct {
     countChildren: bool = false,
 };

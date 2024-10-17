@@ -423,10 +423,10 @@ pub fn TreeWithOptions(comptime K: type, comptime V: type, comptime Cmp: fn (a: 
 
         io: InitOptions,
         lc: Cache,
-        length: usize = 0,
-        root: ?Location = null,
-        min: ?Location = null,
-        max: ?Location = null,
+        length: usize,
+        root: ?Location,
+        min: ?Location,
+        max: ?Location,
 
         // init initializes the tree.
         pub fn init(a: std.mem.Allocator) Self {
