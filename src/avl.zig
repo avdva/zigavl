@@ -124,7 +124,7 @@ fn locationCache(comptime K: type, comptime V: type, comptime Tags: type) type {
             };
         };
 
-        fn allowFastDeinit(self: *Self) bool {
+        fn fastDeinitAllowed(self: *Self) bool {
             const ourAllocAddr: *const anyopaque = @ptrCast(@alignCast(self.a.vtable.alloc));
             inline for (allocAddrs) |ptr| {
                 if (ourAllocAddr == ptr) return true;
@@ -153,11 +153,14 @@ pub const Options = struct {
 
 // InitOptions defines some runtime parameters of the tree instance.
 pub const InitOptions = struct {
-    // allowFastDeinit speeds up deinit() call by making it a no-op
-    // in cases where all the memory can be freed on the allocator level.
+    // allowFastDeinit speeds up deinit() call by making it a no-op in cases
+    // where all the memory can be freed on the allocator level.
+    // normally, deinit() traverses the tree removing each node, however,
+    // this might not be necessary, if certain types of allocators are used.
+    // enum values:
     //  always - deinit() never deletes the nodes.
     //  auto - deinit() does not delete the nodes,
-    //    if std.heap.ArenaAllocator or std.heap.FixedBufferAllocator are used in init().
+    //    if std.heap.ArenaAllocator or std.heap.FixedBufferAllocator are for allocations.
     //  never[default] - deinit() always deletes the nodes.
     allowFastDeinit: enum { always, auto, never } = .never,
 };
@@ -383,6 +386,7 @@ pub fn TreeWithOptions(comptime K: type, comptime V: type, comptime Cmp: fn (a: 
             return b;
         }
 
+        // Iterator traverses the tree.
         pub const Iterator = struct {
             tree: *Self,
             loc: ?Location,
@@ -446,7 +450,7 @@ pub fn TreeWithOptions(comptime K: type, comptime V: type, comptime Cmp: fn (a: 
         //  O(1) - if fast deinit is enabled (see InitOptions.allowFastDeinit).
         //  O(n) - otherwise.
         pub fn deinit(self: *Self) void {
-            if (self.io.allowFastDeinit == .always or self.io.allowFastDeinit == .auto and self.lc.allowFastDeinit()) {
+            if (self.io.allowFastDeinit == .always or self.io.allowFastDeinit == .auto and self.lc.fastDeinitAllowed()) {
                 return;
             }
             const min = self.min orelse return;
