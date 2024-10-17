@@ -108,37 +108,25 @@ fn locationCache(comptime K: type, comptime V: type, comptime Tags: type) type {
         a: std.mem.Allocator,
 
         fn init(a: std.mem.Allocator) Self {
-            //
-            //std.ArrayListAligned(comptime T: type, comptime alignment: ?u29)
-            //std.heap.FixedBufferAllocator
-            //  const f = aa.allocator().vtable.free;
-            // const f2 = a.vtable.free;
-            // if (f == f2) {
-            //    std.log.warn("sadsad", .{});
-            //}
             return Self{
                 .a = a,
             };
         }
 
-        fn fastAllocators() [2]*const anyopaque {
-            comptime {
-                var aa: std.heap.ArenaAllocator = undefined;
-                const aaa = aa.allocator();
-                var fba: std.heap.FixedBufferAllocator = undefined;
-                const fbaa = fba.allocator();
-                return [_]*const anyopaque{
-                    @ptrCast(@alignCast(aaa.vtable.alloc)),
-                    @ptrCast(@alignCast(fbaa.vtable.alloc)),
-                };
-            }
-        }
-
-        const fastAllocAddrs = fastAllocators();
+        const allocAddrs = blk: {
+            var aa: std.heap.ArenaAllocator = undefined;
+            const aaa = aa.allocator();
+            var fba: std.heap.FixedBufferAllocator = undefined;
+            const fbaa = fba.allocator();
+            break :blk [_]*const anyopaque{
+                @ptrCast(@alignCast(aaa.vtable.alloc)),
+                @ptrCast(@alignCast(fbaa.vtable.alloc)),
+            };
+        };
 
         fn allowFastDeinit(self: *Self) bool {
             const ourAllocAddr: *const anyopaque = @ptrCast(@alignCast(self.a.vtable.alloc));
-            inline for (fastAllocAddrs) |ptr| {
+            inline for (allocAddrs) |ptr| {
                 if (ourAllocAddr == ptr) return true;
             }
             return false;
@@ -165,6 +153,12 @@ pub const Options = struct {
 
 // InitOptions defines some runtime parameters of the tree instance.
 pub const InitOptions = struct {
+    // allowFastDeinit speeds up deinit() call by making it a no-op
+    // in cases where all the memory can be freed on the allocator level.
+    //  always - deinit() never deletes the nodes.
+    //  auto - deinit() does not delete the nodes,
+    //    if std.heap.ArenaAllocator or std.heap.FixedBufferAllocator are used in init().
+    //  never[default] - deinit() always deletes the nodes.
     allowFastDeinit: enum { always, auto, never } = .never,
 };
 
@@ -447,6 +441,10 @@ pub fn TreeWithOptions(comptime K: type, comptime V: type, comptime Cmp: fn (a: 
             };
         }
 
+        // deinit releases the memory taken by all the nodes.
+        // Time complexity:
+        //  O(1) - if fast deinit is enabled (see InitOptions.allowFastDeinit).
+        //  O(n) - otherwise.
         pub fn deinit(self: *Self) void {
             if (self.io.allowFastDeinit == .always or self.io.allowFastDeinit == .auto and self.lc.allowFastDeinit()) {
                 return;
@@ -1453,17 +1451,56 @@ test "tree random" {
     }
 }
 
-test "arena allocator" {
-    const a = std.testing.allocator;
-    var arena = std.heap.ArenaAllocator.init(a);
-    const aa = arena.allocator();
+const failingFreeAllocator = struct {
+    ptr: *anyopaque,
+    vtable: std.mem.Allocator.VTable,
+
+    fn free(_: *anyopaque, _: []u8, _: u8, _: usize) void {
+        @panic("should not happen");
+    }
+
+    fn init(a: std.mem.Allocator) failingFreeAllocator {
+        return failingFreeAllocator{ .ptr = a.ptr, .vtable = .{
+            .alloc = a.vtable.alloc,
+            .free = free,
+            .resize = a.vtable.resize,
+        } };
+    }
+
+    fn allocator(self: *failingFreeAllocator) std.mem.Allocator {
+        return std.mem.Allocator{
+            .ptr = self.ptr,
+            .vtable = &self.vtable,
+        };
+    }
+};
+
+test "arena allocator: auto fast deinit" {
+    var arena = std.heap.ArenaAllocator.init(std.testing.allocator);
     defer arena.deinit();
+    try testFastDeinit(.{ .allowFastDeinit = .auto }, arena.allocator());
+}
+
+test "arena allocator: always fast deinit" {
+    var arena = std.heap.ArenaAllocator.init(std.testing.allocator);
+    defer arena.deinit();
+    try testFastDeinit(.{ .allowFastDeinit = .always }, arena.allocator());
+}
+
+test "fixed buffer allocator: auto fast deinit" {
+    var buff: [512]u8 = undefined;
+    var fb = std.heap.FixedBufferAllocator.init(&buff);
+    try testFastDeinit(.{ .allowFastDeinit = .auto }, fb.allocator());
+}
+
+fn testFastDeinit(io: InitOptions, a: std.mem.Allocator) !void {
     const TreeType = TreeWithOptions(i64, i64, i64Cmp, .{});
-    var t = TreeType.initWithOptions(aa, .{ .allowFastDeinit = .auto });
+    var ta: failingFreeAllocator = failingFreeAllocator.init(a);
+    var t = TreeType.initWithOptions(ta.allocator(), io);
+    defer t.deinit();
     _ = try t.insert(0, 0);
     _ = try t.insert(1, 1);
     _ = try t.insert(2, 2);
-    defer t.deinit();
 }
 
 fn checkHeightAndBalance(comptime T: type, loc: ?T.Location) !void {
