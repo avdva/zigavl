@@ -1,154 +1,21 @@
 const std = @import("std");
 const math = std.math;
+const direction = @import("direction.zig").direction;
+const ptrLocationCache = @import("ptr_location.zig").LocationCache;
+const llLocationCache = @import("ll_location.zig").LocationCache;
 
-const direction = enum {
-    left,
-    center,
-    right,
-
-    fn invert(self: direction) direction {
-        switch (self) {
-            .left => return .right,
-            .right => return .left,
-            .center => return .center,
-        }
-    }
+pub const NodeCacheType = enum(u8) {
+    PointerBased,
+    ListBased,
 };
-
-fn makeNodeData(comptime K: type, comptime V: type, comptime Tags: type) type {
-    return struct {
-        const Self = @This();
-        k: K = undefined,
-        v: V = undefined,
-        tags: Tags = undefined,
-        h: u8 = 0,
-
-        fn setHeight(self: *Self, h: u8) bool {
-            const old = self.h;
-            self.h = h;
-            return old != h;
-        }
-    };
-}
-
-fn makeNode(comptime K: type, comptime V: type, comptime L: type, comptime Tags: type) type {
-    return struct {
-        const Self = @This();
-        const NodeData = makeNodeData(K, V, Tags);
-
-        data: NodeData,
-        left: ?L,
-        right: ?L,
-        parent: ?L,
-
-        fn init() Self {
-            return Self{
-                .data = NodeData{},
-                .left = null,
-                .right = null,
-                .parent = null,
-            };
-        }
-    };
-}
-
-fn makePtrLocationType(comptime K: type, comptime V: type, comptime Tags: type) type {
-    return struct {
-        const Self = @This();
-        const Node = makeNode(K, V, Self, Tags);
-        const NodeData = Node.NodeData;
-
-        ptr: *Node,
-
-        fn init(ptr: *Node) Self {
-            return Self{
-                .ptr = ptr,
-            };
-        }
-
-        fn eq(self: *const Self, other: Self) bool {
-            return self.ptr == other.ptr;
-        }
-
-        fn data(self: *const Self) *NodeData {
-            return &self.ptr.data;
-        }
-
-        fn child(self: *const Self, comptime dir: direction) ?Self {
-            switch (dir) {
-                .left => return self.ptr.*.left,
-                .right => return self.ptr.*.right,
-                else => unreachable,
-            }
-        }
-
-        fn setChild(self: *Self, comptime dir: direction, loc: ?Self) void {
-            switch (dir) {
-                .left => self.ptr.*.left = loc,
-                .right => self.ptr.*.right = loc,
-                else => unreachable,
-            }
-        }
-
-        fn parent(self: *const Self) ?Self {
-            return self.ptr.*.parent;
-        }
-
-        fn setParent(self: *Self, p: ?Self) void {
-            self.ptr.*.parent = p;
-        }
-    };
-}
-
-fn locationCache(comptime K: type, comptime V: type, comptime Tags: type) type {
-    return struct {
-        const Self = @This();
-        const Location = makePtrLocationType(K, V, Tags);
-
-        a: std.mem.Allocator,
-
-        fn init(a: std.mem.Allocator) Self {
-            return Self{
-                .a = a,
-            };
-        }
-
-        const allocAddrs = blk: {
-            var aa: std.heap.ArenaAllocator = undefined;
-            const aaa = aa.allocator();
-            var fba: std.heap.FixedBufferAllocator = undefined;
-            const fbaa = fba.allocator();
-            break :blk [_]*const anyopaque{
-                @ptrCast(@alignCast(aaa.vtable.alloc)),
-                @ptrCast(@alignCast(fbaa.vtable.alloc)),
-            };
-        };
-
-        fn fastDeinitAllowed(self: *Self) bool {
-            const ourAllocAddr: *const anyopaque = @ptrCast(@alignCast(self.a.vtable.alloc));
-            inline for (allocAddrs) |ptr| {
-                if (ourAllocAddr == ptr) return true;
-            }
-            return false;
-        }
-
-        fn create(self: *Self) !Location {
-            const node = try self.a.create(Location.Node);
-            node.* = Location.Node.init();
-            return Location.init(node);
-        }
-
-        fn destroy(self: *Self, loc: Location) void {
-            self.a.destroy(loc.ptr);
-        }
-    };
-}
 
 // Options defines some comptime parameters of the tree type.
 pub const Options = struct {
     // countChildren, if set, enables children counts for every node of the tree.
     // the number of children allows to locate a node by its position with a guaranteed complexity O(logn).
     countChildren: bool = false,
+    nodeCacheType: NodeCacheType = .PointerBased,
+    debug: bool = false,
 };
 
 // InitOptions defines some runtime parameters of the tree instance.
@@ -187,7 +54,16 @@ pub fn TreeWithOptions(comptime K: type, comptime V: type, comptime Cmp: fn (a: 
 
         const KeyType = K;
         const ValueType = V;
-        const Cache = locationCache(K, V, Tags);
+        const Cache = blk: {
+            const cacheType = switch (options.nodeCacheType) {
+                .ListBased => llLocationCache(K, V, Tags),
+                .PointerBased => ptrLocationCache(K, V, Tags),
+            };
+            if (options.debug) {
+                break :blk TestLocationCache(cacheType);
+            }
+            break :blk cacheType;
+        };
         const Location = Cache.Location;
         const Comparer = Cmp;
 
@@ -429,14 +305,14 @@ pub fn TreeWithOptions(comptime K: type, comptime V: type, comptime Cmp: fn (a: 
         max: ?Location,
 
         // init initializes the tree.
-        pub fn init(a: std.mem.Allocator) Self {
+        pub fn init(a: std.mem.Allocator) !Self {
             return Self.initWithOptions(a, .{});
         }
 
         // initWithOptions initializes the tree.
-        pub fn initWithOptions(a: std.mem.Allocator, io: InitOptions) Self {
+        pub fn initWithOptions(a: std.mem.Allocator, io: InitOptions) !Self {
             return Self{
-                .lc = Cache.init(a),
+                .lc = try Cache.init(a),
                 .length = 0,
                 .root = null,
                 .min = null,
@@ -999,7 +875,7 @@ fn i64Cmp(a: i64, b: i64) math.Order {
 test "empty tree" {
     const a = std.testing.allocator;
     const TreeType = TreeWithOptions(i64, i64, i64Cmp, .{ .countChildren = true });
-    var t = TreeType.init(a);
+    var t = try TreeType.init(a);
     defer t.deinit();
 
     var it = t.ascendFromStart();
@@ -1011,7 +887,7 @@ test "empty tree" {
 test "tree getOrInsert" {
     const a = std.testing.allocator;
     const TreeType = Tree(i64, i64, i64Cmp);
-    var t = TreeType.init(a);
+    var t = try TreeType.init(a);
     defer t.deinit();
     var ir = t.insert(1, 1) catch unreachable;
     try std.testing.expectEqual(true, ir.inserted);
@@ -1031,7 +907,7 @@ test "tree getOrInsert" {
 test "tree getOrEmplace" {
     const a = std.testing.allocator;
     const TreeType = Tree(i64, i64, i64Cmp);
-    var t = TreeType.init(a);
+    var t = try TreeType.init(a);
     defer t.deinit();
     var i: i64 = 0;
     const ctor = struct {
@@ -1070,7 +946,7 @@ test "tree getOrEmplace" {
 test "tree insert" {
     const a = std.testing.allocator;
     const TreeType = Tree(i64, i64, i64Cmp);
-    var t = TreeType.init(a);
+    var t = try TreeType.init(a);
     defer t.deinit();
     var i: i64 = 0;
     while (i < 128) {
@@ -1129,7 +1005,7 @@ test "tree insert" {
 test "tree delete" {
     const a = std.testing.allocator;
     const TreeType = TreeWithOptions(i64, i64, i64Cmp, .{ .countChildren = true });
-    var t = TreeType.init(a);
+    var t = try TreeType.init(a);
     defer t.deinit();
     var exp_len: usize = 0;
     try std.testing.expectEqual(exp_len, t.len());
@@ -1204,7 +1080,7 @@ test "tree delete" {
 test "delete min" {
     const a = std.testing.allocator;
     const TreeType = TreeWithOptions(i64, i64, i64Cmp, .{ .countChildren = true });
-    var t = TreeType.init(a);
+    var t = try TreeType.init(a);
     defer t.deinit();
 
     var i: i64 = 0;
@@ -1228,7 +1104,7 @@ test "delete min" {
 test "delete max" {
     const a = std.testing.allocator;
     const TreeType = TreeWithOptions(i64, i64, i64Cmp, .{ .countChildren = true });
-    var t = TreeType.init(a);
+    var t = try TreeType.init(a);
     defer t.deinit();
 
     var i: i64 = 0;
@@ -1252,7 +1128,7 @@ test "delete max" {
 test "tree at_countChildren" {
     const a = std.testing.allocator;
     const TreeType = TreeWithOptions(i64, i64, i64Cmp, .{ .countChildren = true });
-    var t = TreeType.init(a);
+    var t = try TreeType.init(a);
     defer t.deinit();
 
     var i: i64 = 0;
@@ -1274,7 +1150,7 @@ test "tree at_countChildren" {
 test "tree at_nocountChildren" {
     const a = std.testing.allocator;
     const TreeType = TreeWithOptions(i64, i64, i64Cmp, .{ .countChildren = true });
-    var t = TreeType.init(a);
+    var t = try TreeType.init(a);
     defer t.deinit();
 
     var i: i64 = 0;
@@ -1296,7 +1172,7 @@ test "tree at_nocountChildren" {
 test "tree deleteAt" {
     const a = std.testing.allocator;
     const TreeType = TreeWithOptions(i64, i64, i64Cmp, .{ .countChildren = true });
-    var t = TreeType.init(a);
+    var t = try TreeType.init(a);
     defer t.deinit();
 
     var i: i64 = 0;
@@ -1332,7 +1208,7 @@ test "tree deleteAt" {
 test "tree iterator" {
     const a = std.testing.allocator;
     const TreeType = TreeWithOptions(i64, i64, i64Cmp, .{ .countChildren = true });
-    var t = TreeType.init(a);
+    var t = try TreeType.init(a);
     defer t.deinit();
 
     var i: i64 = 0;
@@ -1395,7 +1271,7 @@ test "tree iterator" {
 test "tree ascendAt" {
     const a = std.testing.allocator;
     const TreeType = TreeWithOptions(i64, i64, i64Cmp, .{ .countChildren = true });
-    var t = TreeType.init(a);
+    var t = try TreeType.init(a);
     defer t.deinit();
 
     var i: i64 = 0;
@@ -1431,10 +1307,10 @@ test "tree ascendAt" {
     }
 }
 
-test "tree random" {
+fn testTreeRandom(comptime options: Options) !void {
     var a = std.testing.allocator;
-    const TreeType = TreeWithOptions(i64, i64, i64Cmp, .{ .countChildren = true });
-    var t = TreeType.init(a);
+    const TreeType = TreeWithOptions(i64, i64, i64Cmp, options);
+    var t = try TreeType.init(a);
     defer t.deinit();
     var arr = try a.alloc(i64, 2048);
     for (arr, 0..) |_, idx| {
@@ -1444,7 +1320,7 @@ test "tree random" {
     var i: i64 = 0;
     while (i < 10) {
         const exp_len: usize = 0;
-        var r = std.rand.DefaultPrng.init(0);
+        var r = std.Random.DefaultPrng.init(0);
         r.random().shuffle(i64, arr);
         for (arr) |val| {
             const ir = try t.insert(val, val);
@@ -1462,56 +1338,80 @@ test "tree random" {
     }
 }
 
-const failingFreeAllocator = struct {
-    ptr: *anyopaque,
-    vtable: std.mem.Allocator.VTable,
+test "tree random (pointer cache)" {
+    try testTreeRandom(.{ .countChildren = true, .nodeCacheType = .PointerBased });
+}
 
-    fn free(_: *anyopaque, _: []u8, _: u8, _: usize) void {
-        @panic("should not happen");
-    }
+test "tree random (list cache)" {
+    try testTreeRandom(.{ .countChildren = true, .nodeCacheType = .ListBased });
+}
 
-    fn init(a: std.mem.Allocator) failingFreeAllocator {
-        return failingFreeAllocator{ .ptr = a.ptr, .vtable = .{
-            .alloc = a.vtable.alloc,
-            .free = free,
-            .resize = a.vtable.resize,
-        } };
-    }
+fn TestLocationCache(comptime underlying: type) type {
+    return struct {
+        const Self = @This();
+        pub const Location = underlying.Location;
 
-    fn allocator(self: *failingFreeAllocator) std.mem.Allocator {
-        return std.mem.Allocator{
-            .ptr = self.ptr,
-            .vtable = &self.vtable,
-        };
-    }
-};
+        u: underlying,
+
+        destroyHook: ?*const fn (loc: Location) void,
+
+        fn init(a: std.mem.Allocator) !Self {
+            return Self{
+                .u = try underlying.init(a),
+                .destroyHook = null,
+            };
+        }
+
+        fn create(self: *Self) !Location {
+            return self.u.create();
+        }
+
+        pub fn destroy(self: *Self, loc: Location) void {
+            if (self.destroyHook) |dt| {
+                dt(loc);
+            }
+            self.u.destroy(loc);
+        }
+
+        pub fn fastDeinitAllowed(self: *Self) bool {
+            return self.u.fastDeinitAllowed();
+        }
+    };
+}
+
+fn testFastDeinit(io: InitOptions, a: std.mem.Allocator, comptime nct: NodeCacheType) !void {
+    const TreeType = TreeWithOptions(i64, i64, i64Cmp, .{
+        .nodeCacheType = nct,
+        .debug = true,
+    });
+    var t = try TreeType.initWithOptions(a, io);
+    defer t.deinit();
+    t.lc.destroyHook = struct {
+        fn doPanic(_: TreeType.Cache.Location) void {
+            @panic("message: []const u8");
+        }
+    }.doPanic;
+    _ = try t.insert(0, 0);
+    _ = try t.insert(1, 1);
+    _ = try t.insert(2, 2);
+}
 
 test "arena allocator: auto fast deinit" {
     var arena = std.heap.ArenaAllocator.init(std.testing.allocator);
     defer arena.deinit();
-    try testFastDeinit(.{ .allowFastDeinit = .auto }, arena.allocator());
+    try testFastDeinit(.{ .allowFastDeinit = .auto }, arena.allocator(), .PointerBased);
 }
 
 test "arena allocator: always fast deinit" {
     var arena = std.heap.ArenaAllocator.init(std.testing.allocator);
     defer arena.deinit();
-    try testFastDeinit(.{ .allowFastDeinit = .always }, arena.allocator());
+    try testFastDeinit(.{ .allowFastDeinit = .always }, arena.allocator(), .PointerBased);
 }
 
 test "fixed buffer allocator: auto fast deinit" {
-    var buff: [512]u8 = undefined;
+    var buff: [16 * 1024]u8 = undefined;
     var fb = std.heap.FixedBufferAllocator.init(&buff);
-    try testFastDeinit(.{ .allowFastDeinit = .auto }, fb.allocator());
-}
-
-fn testFastDeinit(io: InitOptions, a: std.mem.Allocator) !void {
-    const TreeType = TreeWithOptions(i64, i64, i64Cmp, .{});
-    var ta: failingFreeAllocator = failingFreeAllocator.init(a);
-    var t = TreeType.initWithOptions(ta.allocator(), io);
-    defer t.deinit();
-    _ = try t.insert(0, 0);
-    _ = try t.insert(1, 1);
-    _ = try t.insert(2, 2);
+    try testFastDeinit(.{ .allowFastDeinit = .auto }, fb.allocator(), .PointerBased);
 }
 
 fn checkHeightAndBalance(comptime T: type, loc: ?T.Location) !void {
