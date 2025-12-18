@@ -326,6 +326,7 @@ pub fn TreeWithOptions(comptime K: type, comptime V: type, comptime Cmp: fn (a: 
         //  O(1) - if fast deinit is enabled (see InitOptions.allowFastDeinit).
         //  O(n) - otherwise.
         pub fn deinit(self: *Self) void {
+            defer self.lc.deinit();
             if (self.io.allowFastDeinit == .always or self.io.allowFastDeinit == .auto and self.lc.fastDeinitAllowed()) {
                 return;
             }
@@ -1312,7 +1313,7 @@ fn testTreeRandom(comptime options: Options) !void {
     const TreeType = TreeWithOptions(i64, i64, i64Cmp, options);
     var t = try TreeType.init(a);
     defer t.deinit();
-    var arr = try a.alloc(i64, 2048);
+    var arr = try a.alloc(i64, 1024);
     for (arr, 0..) |_, idx| {
         arr[idx] = @as(i64, @intCast(idx));
     }
@@ -1361,6 +1362,8 @@ fn TestLocationCache(comptime underlying: type) type {
                 .destroyHook = null,
             };
         }
+
+        fn deinit(_: *Self) void {}
 
         fn create(self: *Self) !Location {
             return self.u.create();

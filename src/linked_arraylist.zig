@@ -6,53 +6,86 @@ const testing = std.testing;
 const assert = std.debug.assert;
 
 pub const Address = u32;
+
 pub const InvalidAddr = math.maxInt(Address);
 
+pub const Error = error{
+    InvalidCapacity,
+    InvalidWatermarks,
+};
+
 pub const Options = struct {
-    pub const UnlimitedFreeListSize: u16 = math.maxInt(u16);
-    cap: usize = 16,
+    // InfiniteWatermark is a special value for loadHighWatermark.
+    // When set, the free list size is not limited and the memory is never released.
+    pub const InfiniteWatermark: u16 = math.maxInt(u16);
+    // capacity is the initial capacity of the list.
+    // The underlying list's capacity is set to this value each time clear() is called.
+    capacity: usize = 16,
+    // allowRelocations, if set, allows LinkedArrayList to relocate nodes in the list,
+    // invalidating pointers to those nodes.
+    // When a node is removed at the position which is not the last physical position of the list,
+    // the node from the last physical position will be relocated to this position.
+    // The nodes at the end of the list will be reused for newly added items.
+    // When an relocation happens, relocCallbackFn, if set, will be called with relocCallbackCtx
+    // and two addresses: source and destination addresses of the relocation.
+    // If allowRelocations is not set, the nodes of the removed elements form a free-list and will be reused
+    // for newly added elements.
+    // If relocations are allowed, the list may shrink the size of underlying list to save memory.
+    // There are two parameters to control memory reclaims: loadHighWatermark, loadLowWatermark.
+    // Consider
     // loadFactor allows to specify maximum free list size to the list size ratio (in percentage, e.g. 10):
     //                 free_list_size
     //  loadFactor = ------------------- * 100
     //                    list_size
-    // when this value is exceeded, the list starts relocations.
-    //
-    // possible values:
-    //
-    //  0: disallow free list, always relocate nodes.
-    //
-    //  1..math.maxInt(u16)-1: ratio value as a percentage. the list will relocate nodes releasing memory,
-    //  when the free list size exceeds this percentage of the list size. the relocations will continue until the
-    //  free list size is below loadfactor / 2.
-    //  for example, with loadFactor = 10, when this value is exceeded, the list will relocate nodes
-    //  until the free list size is below 5% of the list size.
-    //
-    //  math.maxInt(u16):  (default) don't limit free list size (disable relocations).
-    loadFactor: u16 = UnlimitedFreeListSize,
-    ctx: *anyopaque = undefined,
-    relocCb: ?*const fn (ctx: *anyopaque, from: Address, to: Address) void = null,
+    // Then:
+    //  - loadHighWatermark is the upper limit for the loadFactor. When it's reached, the unused memory will be freed.
+    //  - loadLowWatermark if the target value for loadFactor when the memory is being released. Must be <= loadHighWatermark.
+    allowRelocations: bool = false,
+    // loadHighWatermark is the upper limit for the loadFactor.
+    loadHighWatermark: u16 = 10,
+    // loadLowWatermark if the target value for loadFactor when the memory is being released
+    loadLowWatermark: u16 = 5,
+    // relocCallbackFn, if set will be called each time a relocation happens.
+    //  ctx - the context to be passed to the callback.
+    //  from - the address where the node was located.
+    //  to - the new address of the node.
+    relocCallbackFn: ?*const fn (ctx: *anyopaque, from: Address, to: Address) void = null,
+    // relocCallbackCtx is an arbitrary user-defined value to be passed to relocCallbackFn.
+    relocCallbackCtx: *anyopaque = undefined,
 };
 
 pub fn LinkedArrayList(comptime T: type) type {
-    const Node = struct {
-        elem: T,
-        left: Address,
-        right: Address,
-    };
-
     return struct {
+        const Node = struct {
+            elem: T,
+            left: Address,
+            right: Address,
+        };
+
         const Self = @This();
 
-        free_list_tail: Address,
         free_list_size: usize,
+        free_list_tail: Address,
         head_addr: Address,
         tail_addr: Address,
         length: usize,
         options: Options,
         list: std.ArrayList(Node),
-        a: Allocator,
+        allocator: Allocator,
 
-        pub fn initOptions(a: Allocator, options: Options) Allocator.Error!Self {
+        fn validateOptions(options: Options) !void {
+            if (options.capacity < 0) {
+                return Error.InvalidCapacity;
+            }
+            if (options.allowRelocations) {
+                if (options.loadLowWatermark > options.loadHighWatermark) {
+                    return Error.InvalidWatermarks;
+                }
+            }
+        }
+
+        pub fn initOptions(allocator: Allocator, options: Options) !Self {
+            try validateOptions(options);
             return Self{
                 .free_list_tail = InvalidAddr,
                 .free_list_size = 0,
@@ -60,12 +93,12 @@ pub fn LinkedArrayList(comptime T: type) type {
                 .tail_addr = InvalidAddr,
                 .length = 0,
                 .options = options,
-                .a = a,
-                .list = try std.ArrayList(Node).initCapacity(a, options.cap),
+                .allocator = allocator,
+                .list = try std.ArrayList(Node).initCapacity(allocator, options.capacity),
             };
         }
 
-        pub fn fromSlice(a: mem.Allocator, slice: []const T) Allocator.Error!Self {
+        pub fn fromSlice(a: mem.Allocator, slice: []const T) !Self {
             var al = try Self.initOptions(a, .{});
             errdefer al.deinit();
             for (slice) |val| {
@@ -74,12 +107,12 @@ pub fn LinkedArrayList(comptime T: type) type {
             return al;
         }
 
-        pub fn fromArray(a: mem.Allocator, comptime N: usize, array: [N]T) Allocator.Error!Self {
+        pub fn fromArray(a: mem.Allocator, comptime N: usize, array: [N]T) !Self {
             return fromSlice(a, array[0..]);
         }
 
-        pub fn toOwnedSlice(self: *Self) Allocator.Error![]T {
-            var slice = try self.a.alloc(T, self.len());
+        pub fn toOwnedSlice(self: *Self) ![]T {
+            var slice = try self.allocator.alloc(T, self.len());
             var it = self.iterator();
             var i: usize = 0;
             while (it.value()) |val| {
@@ -91,22 +124,21 @@ pub fn LinkedArrayList(comptime T: type) type {
         }
 
         pub fn deinit(self: *Self) void {
-            self.list.deinit(self.a);
+            self.list.deinit(self.allocator);
         }
 
         pub fn len(self: *const Self) usize {
             return self.length;
         }
 
+        // clear removes all elements from the list.
         pub fn clear(self: *Self) void {
             self.free_list_tail = InvalidAddr;
             self.free_list_size = 0;
             self.head_addr = InvalidAddr;
             self.tail_addr = InvalidAddr;
             self.length = 0;
-            if (self.list.items.len > self.options.cap) {
-                self.list.shrinkRetainingCapacity(self.options.cap);
-            }
+            self.shrinkTo(0);
         }
 
         pub fn eq(self: *Self, other: *Self) bool {
@@ -133,7 +165,7 @@ pub fn LinkedArrayList(comptime T: type) type {
                 self.list.items[new_node_addr] = new_node;
             } else { // append new node.
                 new_node_addr = @intCast(self.list.items.len);
-                try self.list.append(self.a, new_node);
+                try self.list.append(self.allocator, new_node);
             }
             if (self.length > 0) { // there was at least one element. update its right index.
                 self.list.items[self.tail_addr].right = new_node_addr;
@@ -155,7 +187,7 @@ pub fn LinkedArrayList(comptime T: type) type {
             return result;
         }
 
-        fn add_to_free_list(self: *Self, addr: Address) void {
+        fn addToFreeList(self: *Self, addr: Address) void {
             var node = &self.list.items[addr];
             node.right = InvalidAddr;
             if (self.free_list_tail == InvalidAddr) {
@@ -192,13 +224,6 @@ pub fn LinkedArrayList(comptime T: type) type {
 
             const node = &self.list.items[addr];
             const elem = node.elem;
-            // removing one last head element.
-            // just clear the list.
-            if (self.len() == 1) {
-                assert(node.left == InvalidAddr and node.right == InvalidAddr);
-                self.clear();
-                return elem;
-            }
 
             // deal with the right neighbor
             if (node.right != InvalidAddr) {
@@ -216,71 +241,95 @@ pub fn LinkedArrayList(comptime T: type) type {
                 assert(left.right == addr);
                 left.right = node.right;
             } else { // removing head
-                var right = &self.list.items[node.right];
                 assert(addr == self.head_addr);
                 self.head_addr = node.right;
-                right.left = InvalidAddr;
             }
+
+            self.length -= 1;
 
             self.itemRemovedAt(addr);
 
-            self.length -= 1;
             return elem;
         }
 
         fn itemRemovedAt(self: *Self, addr: Address) void {
-            switch (self.options.loadFactor) {
-                0 => { // no free list, always relocate
-                    self.relocateAtAddress(addr);
-                },
-                Options.UnlimitedFreeListSize => { // unlimited free list size, never relocate
-                    self.add_to_free_list(addr);
-                },
-                else => { // relocate based on load factor
-                    self.add_to_free_list(addr);
-                    const target_ratio = @as(f64, @floatFromInt(self.options.loadFactor)) / 200.0;
-                    while (self.free_list_size > 0) {
-                        const current_ratio: f64 = (@as(f64, @floatFromInt(self.free_list_size)) /
-                            @as(f64, @floatFromInt(self.length)));
-                        if (current_ratio <= target_ratio) {
-                            break;
-                        }
-                        const free_addr = self.takeNodeFromFreeList();
-                        self.relocateAtAddress(free_addr);
-                    }
-                },
+            if (self.options.allowRelocations) {
+                const last_item_addr = @as(Address, @intCast(self.length));
+                self.relocate(last_item_addr, addr);
+                self.addToFreeList(last_item_addr);
+                self.checkLoadFactor();
+            } else {
+                self.addToFreeList(addr);
             }
         }
 
-        fn relocateAtAddress(self: *Self, addr: Address) void {
-            const last_addr = @as(Address, @intCast(self.list.items.len)) - 1;
-            if (addr != last_addr) {
-                self.doRelocateAtAddress(addr);
+        fn checkLoadFactor(self: *Self) void {
+            const length = self.length;
+            if (self.options.loadHighWatermark == Options.InfiniteWatermark) {
+                return;
             }
-            _ = self.list.pop();
-            if (self.options.relocCb) |cb| {
-                cb(self.options.ctx, last_addr, addr);
+            if (length == 0) {
+                self.shrinkTo(0);
+                return;
+            }
+            const current_ratio: usize = self.free_list_size * 100 / length;
+            if (current_ratio < self.options.loadHighWatermark) {
+                return;
+            }
+            const new_len: usize = length + length * self.options.loadLowWatermark / 100;
+            self.shrinkTo(new_len);
+        }
+
+        // shrinkTo shrinks the underlying arraylist to `new_len` length.
+        // it always retains the capacity specified in the options.
+        fn shrinkTo(self: *Self, new_len: usize) void {
+            if (new_len >= self.list.items.len) {
+                return;
+            }
+            if (new_len > self.options.capacity) {
+                self.list.shrinkAndFree(self.allocator, new_len);
+            } else {
+                self.list.shrinkRetainingCapacity(new_len);
+            }
+            self.free_list_size = @max(new_len - self.length, 0);
+            if (self.free_list_size > 0) {
+                const last_free_list_item_addr = @as(Address, @intCast(self.length)) - 1;
+                self.list.items[last_free_list_item_addr].left = InvalidAddr;
+            } else {
+                self.free_list_tail = InvalidAddr;
             }
         }
 
-        fn doRelocateAtAddress(self: *Self, addr: Address) void {
-            const last_addr = @as(Address, @intCast(self.list.items.len)) - 1;
-            const lastNode = &self.list.items[last_addr];
-            const node = &self.list.items[addr];
-            node.* = lastNode.*;
-            if (node.left != InvalidAddr) {
-                assert(self.list.items[node.left].right == last_addr);
-                self.list.items[node.left].right = addr;
+        // relocate relocated data from `from` address to `to` address.
+        // relocation callback is called if the move has happened (i.e. if addr != address of the last item).
+        fn relocate(self: *Self, from: Address, to: Address) void {
+            if (from != to) {
+                self.relocateAtAddress(from, to);
+                if (self.options.relocCallbackFn) |cb| {
+                    cb(self.options.relocCallbackCtx, from, to);
+                }
             }
-            if (node.right != InvalidAddr) {
-                assert(self.list.items[node.right].left == last_addr);
-                self.list.items[node.right].left = addr;
+        }
+
+        // relocateAtAddress relocates data from the `from` address to `to`.
+        // assumes that the the items at both addresses are not in the free list.
+        fn relocateAtAddress(self: *Self, from: Address, to: Address) void {
+            const fromNode = &self.list.items[from];
+            const toNode = &self.list.items[to];
+            toNode.* = fromNode.*;
+            if (toNode.left != InvalidAddr) {
+                assert(self.list.items[toNode.left].right == from);
+                self.list.items[toNode.left].right = to;
             }
-            if (self.head_addr == last_addr) {
-                self.head_addr = addr;
+            if (toNode.right != InvalidAddr) {
+                assert(self.list.items[toNode.right].left == from);
+                self.list.items[toNode.right].left = to;
             }
-            if (self.tail_addr == last_addr) {
-                self.tail_addr = addr;
+            if (self.head_addr == from) {
+                self.head_addr = to;
+            }
+            if (self.tail_addr == from) {
+                self.tail_addr = to;
             }
         }
 
@@ -496,7 +545,6 @@ test "LinkedArrayList free list" {
         defer exp.deinit();
         try testing.expect(la.eq(&exp));
     }
-    try testing.expectEqual(@as(usize, @intCast(size - 1)), la.list.items.len);
     _ = try la.push(@as(i32, @intCast(0)));
     _ = try la.push(@as(i32, @intCast(15)));
     _ = try la.push(@as(i32, @intCast(6)));
@@ -512,43 +560,232 @@ test "LinkedArrayList free list" {
     try testing.expectEqual(@as(usize, @intCast(0)), la.len());
 }
 
-test "LinkedArrayList always relocate" {
-    const size = 128;
+fn calculateListLengthFromTail(comptime T: type, start: Address, list: *LinkedArrayList(T)) usize {
+    var length: usize = 0;
+    var addr = start;
+    while (addr != InvalidAddr) {
+        const node = &list.list.items[addr];
+        addr = node.left;
+        length += 1;
+    }
+    return length;
+}
+
+fn calculateListLengthFromHead(comptime T: type, start: Address, list: *LinkedArrayList(T)) usize {
+    var length: usize = 0;
+    var addr = start;
+    while (addr != InvalidAddr) {
+        const node = &list.list.items[addr];
+        addr = node.right;
+        length += 1;
+    }
+    return length;
+}
+
+test "LinkedArrayList ensure list size and free list sizes are correct" {
+    const total_size: usize = 128;
     const a = testing.allocator;
-    var rcb = reallocHelper{};
     var la = LinkedArrayList(i32).initOptions(a, .{
-        .loadFactor = 0,
-        .ctx = &rcb,
-        .relocCb = reallocHelper.cb,
+        .loadHighWatermark = Options.InfiniteWatermark,
+        .allowRelocations = true,
     }) catch |err| {
         std.debug.panic("Failed to init LinkedArrayList: {}", .{err});
     };
     defer la.deinit();
     var i: i32 = 0;
+    // add elements 0..127 to the list
+    while (i < total_size) : (i += 1) {
+        const addr = try la.push(i);
+        try testing.expectEqual(i, la.get(addr));
+    }
+
+    i = 0;
+    while (i < total_size) : (i += 1) {
+        try std.testing.expectEqual(@as(usize, @intCast(i)), calculateListLengthFromTail(i32, la.free_list_tail, &la));
+        try std.testing.expectEqual(total_size - @as(usize, @intCast(i)), calculateListLengthFromHead(i32, la.head_addr, &la));
+        try std.testing.expectEqual(total_size - @as(usize, @intCast(i)), calculateListLengthFromTail(i32, la.tail_addr, &la));
+        _ = la.pop_head();
+    }
+
+    i = 0;
+    while (i < total_size) : (i += 1) {
+        try std.testing.expectEqual(total_size - @as(usize, @intCast(i)), calculateListLengthFromTail(i32, la.free_list_tail, &la));
+        try std.testing.expectEqual(@as(usize, @intCast(i)), calculateListLengthFromHead(i32, la.head_addr, &la));
+        try std.testing.expectEqual(@as(usize, @intCast(i)), calculateListLengthFromTail(i32, la.tail_addr, &la));
+        _ = try la.push(i);
+    }
+}
+
+test "LinkedArrayList relocate, never free memory" {
+    const total_size: usize = 128;
+    var current_size: usize = total_size;
+    const a = testing.allocator;
+    var rcb = reallocHelper{};
+    var la = LinkedArrayList(i32).initOptions(a, .{
+        .loadHighWatermark = Options.InfiniteWatermark,
+        .allowRelocations = true,
+        .relocCallbackCtx = &rcb,
+        .relocCallbackFn = reallocHelper.cb,
+    }) catch |err| {
+        std.debug.panic("Failed to init LinkedArrayList: {}", .{err});
+    };
+    defer la.deinit();
+    var i: i32 = 0;
+    // add elements 0..127 to the list
+    while (i < current_size) : (i += 1) {
+        const addr = try la.push(i);
+        try testing.expectEqual(i, la.get(addr));
+    }
+    try std.testing.expectEqual(null, rcb.actFrom);
+    try std.testing.expectEqual(null, rcb.actTo);
+    try std.testing.expectEqual(current_size, la.len());
+    try std.testing.expectEqual(total_size - current_size, calculateListLengthFromTail(i32, la.free_list_tail, &la));
+    current_size -= 1;
+
+    // pop tail, no relocation should happen
+    var removed: i32 = la.pop_tail();
+    try std.testing.expectEqual(127, removed);
+    try std.testing.expectEqual(null, rcb.actFrom);
+    try std.testing.expectEqual(null, rcb.actTo);
+    try std.testing.expectEqual(current_size, la.len());
+    try std.testing.expectEqual(total_size - current_size, calculateListLengthFromTail(i32, la.free_list_tail, &la));
+    current_size -= 1;
+
+    // pop head, the new head should be at position 1, and the last item should
+    // be relocated to position 0.
+    removed = la.pop_head();
+    try std.testing.expectEqual(0, removed);
+    try std.testing.expectEqual(126, rcb.actFrom);
+    try std.testing.expectEqual(0, rcb.actTo);
+    try std.testing.expectEqual(current_size, la.len());
+    try std.testing.expectEqual(total_size - current_size, calculateListLengthFromTail(i32, la.free_list_tail, &la));
+    current_size -= 1;
+
+    // remove elements in the middle of the list. this should always cause relocations.
+    while (la.len() > 2) {
+        const l = la.len();
+        const addr = @as(Address, @intCast(l / 2));
+        rcb.reset();
+        _ = la.deleteAtAddr(addr);
+        // exactly one call should be made and an item from the last address should be relocated to `addr`.
+        try std.testing.expectEqual(1, rcb.calls);
+        try std.testing.expectEqual(addr, rcb.actTo.?);
+        try std.testing.expectEqual(l - 1, rcb.actFrom.?);
+        try std.testing.expectEqual(current_size, la.len());
+        try std.testing.expectEqual(total_size - current_size, calculateListLengthFromTail(i32, la.free_list_tail, &la));
+        current_size -= 1;
+    }
+    // now we have the following list:
+    // logical:  65 -> 126
+    // physical: 126 -> 65
+    // if we remove the tail, a relocation should happen.
+    rcb.reset();
+    removed = la.pop_tail();
+    try std.testing.expectEqual(126, removed);
+    try std.testing.expectEqual(1, rcb.calls);
+    try std.testing.expectEqual(1, rcb.actFrom);
+    try std.testing.expectEqual(0, rcb.actTo);
+    try std.testing.expectEqual(1, la.len());
+    try std.testing.expectEqual(total_size - current_size, calculateListLengthFromTail(i32, la.free_list_tail, &la));
+    // finally, remove the last element
+    rcb.reset();
+    removed = la.pop_tail();
+    try std.testing.expectEqual(65, removed);
+    try std.testing.expectEqual(0, rcb.calls);
+    try std.testing.expectEqual(null, rcb.actFrom);
+    try std.testing.expectEqual(null, rcb.actTo);
+    try std.testing.expectEqual(0, la.len());
+    try std.testing.expectEqual(total_size, calculateListLengthFromTail(i32, la.free_list_tail, &la));
+
+    la.clear();
+    try std.testing.expectEqual(0, la.len());
+    try std.testing.expectEqual(0, calculateListLengthFromTail(i32, la.free_list_tail, &la));
+}
+
+test "LinkedArrayList relocate, free memory every call to remove" {
+    var size: usize = 128;
+    const a = testing.allocator;
+    var rcb = reallocHelper{};
+    var la = LinkedArrayList(i32).initOptions(a, .{
+        .loadHighWatermark = 0,
+        .loadLowWatermark = 0,
+        .allowRelocations = true,
+        .relocCallbackCtx = &rcb,
+        .relocCallbackFn = reallocHelper.cb,
+    }) catch |err| {
+        std.debug.panic("Failed to init LinkedArrayList: {}", .{err});
+    };
+    defer la.deinit();
+    var i: i32 = 0;
+    // add elements 0..127 to the list
     while (i < size) : (i += 1) {
         const addr = try la.push(i);
         try testing.expectEqual(i, la.get(addr));
     }
     try std.testing.expectEqual(null, rcb.actFrom);
     try std.testing.expectEqual(null, rcb.actTo);
+    try std.testing.expectEqual(size, la.len());
+    try std.testing.expectEqual(0, calculateListLengthFromTail(i32, la.free_list_tail, &la));
+    size -= 1;
 
-    _ = la.pop_tail();
+    // pop tail, no relocation should happen
+    var removed: i32 = la.pop_tail();
+    try std.testing.expectEqual(127, removed);
     try std.testing.expectEqual(null, rcb.actFrom);
     try std.testing.expectEqual(null, rcb.actTo);
+    try std.testing.expectEqual(size, la.len());
+    try std.testing.expectEqual(0, calculateListLengthFromTail(i32, la.free_list_tail, &la));
+    size -= 1;
 
-    _ = la.pop_head();
+    // pop head, the new head should be at position 1, and the last item should
+    // be relocated to position 0.
+    removed = la.pop_head();
+    try std.testing.expectEqual(0, removed);
     try std.testing.expectEqual(126, rcb.actFrom);
     try std.testing.expectEqual(0, rcb.actTo);
+    try std.testing.expectEqual(size, la.len());
+    try std.testing.expectEqual(0, calculateListLengthFromTail(i32, la.free_list_tail, &la));
+    size -= 1;
 
+    // remove elements in the middle of the list. this should always cause relocations.
     while (la.len() > 2) {
-        rcb.reset();
         const l = la.len();
         const addr = @as(Address, @intCast(l / 2));
+        rcb.reset();
         _ = la.deleteAtAddr(addr);
+        // exactly one call should be made and an item from the last address should be relocated to `addr`.
         try std.testing.expectEqual(1, rcb.calls);
         try std.testing.expectEqual(addr, rcb.actTo.?);
         try std.testing.expectEqual(l - 1, rcb.actFrom.?);
+        try std.testing.expectEqual(size, la.len());
+        try std.testing.expectEqual(0, calculateListLengthFromTail(i32, la.free_list_tail, &la));
+        size -= 1;
     }
+    // now we have the following list:
+    // logical:  65 -> 126
+    // physical: 126 -> 65
+    // if we remove the tail, a relocation should happen.
+    rcb.reset();
+    removed = la.pop_tail();
+    try std.testing.expectEqual(126, removed);
+    try std.testing.expectEqual(1, rcb.calls);
+    try std.testing.expectEqual(1, rcb.actFrom);
+    try std.testing.expectEqual(0, rcb.actTo);
+    try std.testing.expectEqual(1, la.len());
+    try std.testing.expectEqual(0, calculateListLengthFromTail(i32, la.free_list_tail, &la));
+    // finally, remove the last element
+    rcb.reset();
+    removed = la.pop_tail();
+    try std.testing.expectEqual(65, removed);
+    try std.testing.expectEqual(0, rcb.calls);
+    try std.testing.expectEqual(null, rcb.actFrom);
+    try std.testing.expectEqual(null, rcb.actTo);
+    try std.testing.expectEqual(0, la.len());
+    try std.testing.expectEqual(0, calculateListLengthFromTail(i32, la.free_list_tail, &la));
+
+    la.clear();
+    try std.testing.expectEqual(0, la.len());
+    try std.testing.expectEqual(0, calculateListLengthFromTail(i32, la.free_list_tail, &la));
 }
 
 const reallocHelper = struct {
@@ -568,34 +805,6 @@ const reallocHelper = struct {
         self.calls = 0;
     }
 };
-
-test "LinkedArrayList relocate 10pc" {
-    const size = 100;
-    const a = testing.allocator;
-    var rcb = reallocHelper{};
-    var la = LinkedArrayList(i32).initOptions(a, .{
-        .loadFactor = 10,
-        .ctx = &rcb,
-        .relocCb = reallocHelper.cb,
-    }) catch |err| {
-        std.debug.panic("Failed to init LinkedArrayList: {}", .{err});
-    };
-    defer la.deinit();
-    var i: i32 = 0;
-    while (i < size) : (i += 1) {
-        const addr = try la.push(i);
-        try testing.expectEqual(i, la.get(addr));
-    }
-    i = 0;
-    while (i < size) : (i += 1) {
-        _ = la.deleteAtPos(0);
-        // try std.testing.expectEqual(@as(?Address, null), rcb.actFrom);
-        //try std.testing.expectEqual(@as(?Address, null), rcb.actTo);
-        //std.log.warn("xxx {} {}", .{ i, rcb.calls });
-    }
-    //_ = la.deleteAtPos(0);
-    //try std.testing.expectEqual(10, rcb.calls);
-}
 
 test "LinkedArrayList remove" {
     const a = testing.allocator;

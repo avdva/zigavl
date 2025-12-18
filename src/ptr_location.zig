@@ -64,6 +64,10 @@ pub fn LocationCache(comptime K: type, comptime V: type, comptime Tags: type) ty
             };
         }
 
+        pub fn deinit(_: *Self) void {
+
+        }
+
         pub fn create(self: *Self) !Location {
             const node = try self.a.create(Location.Node);
             node.* = Location.Node.init();
