@@ -30,7 +30,7 @@ test "test pub decls" {
 }
 
 test "tree example usage" {
-    var gpa = std.heap.GeneralPurposeAllocator(.{}){};
+    var gpa = std.heap.DebugAllocator(.{}){};
     defer _ = gpa.detectLeaks();
     // first, create an i64-->i64 tree
     const TreeType = lib.TreeWithOptions(i64, i64, i64Cmp, .{ .countChildren = true });

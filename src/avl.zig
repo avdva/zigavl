@@ -1444,7 +1444,7 @@ test "tree random" {
     var i: i64 = 0;
     while (i < 10) {
         const exp_len: usize = 0;
-        var r = std.rand.DefaultPrng.init(0);
+        var r = std.Random.DefaultPrng.init(0);
         r.random().shuffle(i64, arr);
         for (arr) |val| {
             const ir = try t.insert(val, val);
@@ -1466,7 +1466,7 @@ const failingFreeAllocator = struct {
     ptr: *anyopaque,
     vtable: std.mem.Allocator.VTable,
 
-    fn free(_: *anyopaque, _: []u8, _: u8, _: usize) void {
+    fn free(_: *anyopaque, _: []u8, _: std.mem.Alignment, _: usize) void {
         @panic("should not happen");
     }
 
@@ -1474,6 +1474,7 @@ const failingFreeAllocator = struct {
         return failingFreeAllocator{ .ptr = a.ptr, .vtable = .{
             .alloc = a.vtable.alloc,
             .free = free,
+            .remap = a.vtable.remap,
             .resize = a.vtable.resize,
         } };
     }
