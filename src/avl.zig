@@ -148,6 +148,7 @@ fn locationCache(comptime K: type, comptime V: type, comptime Tags: type) type {
 pub const Options = struct {
     // countChildren, if set, enables children counts for every node of the tree.
     // the number of children allows to locate a node by its position with a guaranteed complexity O(logn).
+    // With countChildren enabled, trees larger than maxInt(u32) + 1 elements are not supported.
     countChildren: bool = false,
 };
 
@@ -197,9 +198,20 @@ pub fn TreeWithOptions(comptime K: type, comptime V: type, comptime Cmp: fn (a: 
             dir: direction,
         };
 
+        // Entry is a view of an element that still lives in the tree.
+        // Value points into the tree and can be used to update the stored value.
+        // The pointer is valid until the corresponding node is deleted or the
+        // tree is deinitialized.
         pub const Entry = struct {
-            k: K,
-            v: *V,
+            Key: K,
+            Value: *V,
+        };
+
+        // KV is an owned key-value pair returned by deleteAt.
+        // Unlike Entry, Value is copied out because the node has been removed.
+        pub const KV = struct {
+            Key: K,
+            Value: V,
         };
 
         fn goLeft(loc: Location) Location {
@@ -388,6 +400,9 @@ pub fn TreeWithOptions(comptime K: type, comptime V: type, comptime Cmp: fn (a: 
         }
 
         // Iterator traverses the tree.
+        // An iterator is valid only for the tree that created it. If the node
+        // pointed to by the iterator is deleted, that iterator becomes invalid;
+        // use the iterator returned by deleteIterator instead.
         pub const Iterator = struct {
             tree: *Self,
             loc: ?Location,
@@ -399,23 +414,27 @@ pub fn TreeWithOptions(comptime K: type, comptime V: type, comptime Cmp: fn (a: 
                 };
             }
 
+            // next advances the iterator to the next larger key.
             pub fn next(self: *Iterator) void {
                 if (self.loc) |l| {
                     self.loc = nextInOrderLocation(l);
                 }
             }
 
+            // prev advances the iterator to the next smaller key.
             pub fn prev(self: *Iterator) void {
                 if (self.loc) |l| {
                     self.loc = prevInOrderLocation(l);
                 }
             }
 
+            // value returns the element currently pointed to by the iterator.
+            // It returns null when the iterator is past either end of the tree.
             pub fn value(self: *const Iterator) ?Entry {
                 if (self.loc) |l| {
                     return Entry{
-                        .k = l.data().k,
-                        .v = &l.data().v,
+                        .Key = l.data().k,
+                        .Value = &l.data().v,
                     };
                 }
                 return null;
@@ -429,12 +448,12 @@ pub fn TreeWithOptions(comptime K: type, comptime V: type, comptime Cmp: fn (a: 
         min: ?Location,
         max: ?Location,
 
-        // init initializes the tree.
+        // init initializes an empty tree using the given allocator.
         pub fn init(a: std.mem.Allocator) Self {
             return Self.initWithOptions(a, .{});
         }
 
-        // initWithOptions initializes the tree.
+        // initWithOptions initializes an empty tree with runtime options.
         pub fn initWithOptions(a: std.mem.Allocator, io: InitOptions) Self {
             return Self{
                 .lc = Cache.init(a),
@@ -447,6 +466,7 @@ pub fn TreeWithOptions(comptime K: type, comptime V: type, comptime Cmp: fn (a: 
         }
 
         // deinit releases the memory taken by all the nodes.
+        // It does not destroy or deinitialize stored keys or values.
         // Time complexity:
         //  O(1) - if fast deinit is enabled (see InitOptions.allowFastDeinit).
         //  O(n) - otherwise.
@@ -464,7 +484,7 @@ pub fn TreeWithOptions(comptime K: type, comptime V: type, comptime Cmp: fn (a: 
             }
         }
 
-        // len returns the number of elements.
+        // len returns the number of elements currently stored in the tree.
         pub fn len(self: *const Self) usize {
             return self.length;
         }
@@ -482,17 +502,17 @@ pub fn TreeWithOptions(comptime K: type, comptime V: type, comptime Cmp: fn (a: 
             return new_loc;
         }
 
-        // InsertResult is returned from any function that inserts data to the tree.
-        //  inserted == true if a new node was added to the tree.
-        //  v - a pointer to the data, existing before the call, or the newly added.
+        // InsertResult is returned from functions that may insert data.
+        // inserted is true when a new node was added.
+        // v points to the stored value, either existing before the call or newly added.
         pub const InsertResult = struct {
             inserted: bool,
             v: *V,
         };
 
-        // getOrEmplace inserts a new kv pair into the tree.
-        //  - if tree already contains 'k', the function returns InsertResult{.inserted = false, .v = ptr_to_existing_value}
-        //  - otherwise calls ctor with given args to initialise a newly created value.
+        // getOrEmplace inserts a new key-value pair into the tree.
+        // If the key is already present, the existing value is returned.
+        // Otherwise, ctor initializes the newly created value in place.
         // Time complexity: O(logn).
         pub fn getOrEmplace(self: *Self, k: K, ctor: fn (v: *V, args: anytype) void, args: anytype) !InsertResult {
             const res = self.locate(k);
@@ -513,14 +533,15 @@ pub fn TreeWithOptions(comptime K: type, comptime V: type, comptime Cmp: fn (a: 
             };
         }
 
-        // getOrInsert inserts a new kv pair into the tree if tke key is not present.
+        // getOrInsert inserts a new key-value pair if the key is not present.
+        // If the key already exists, the stored value is left unchanged.
         // Time complexity: O(logn).
         pub fn getOrInsert(self: *Self, k: K, v: V) !InsertResult {
             return self.doInsert(k, v, false);
         }
 
-        // insert inserts a node into the tree.
-        // If the key `k` was present in the tree, node's value is updated to `v`.
+        // insert inserts or replaces a key-value pair.
+        // If the key is already present, its value is updated.
         // Time complexity: O(logn).
         pub fn insert(self: *Self, k: K, v: V) !InsertResult {
             return self.doInsert(k, v, true);
@@ -582,8 +603,8 @@ pub fn TreeWithOptions(comptime K: type, comptime V: type, comptime Cmp: fn (a: 
             self.lc.destroy(loc);
         }
 
-        // delete deletes a node from the tree.
-        // Returns the value associated with k, if the node was present in the tree.
+        // delete removes a key from the tree.
+        // It returns the removed value if the key was present.
         // Time complexity: O(logn).
         pub fn delete(self: *Self, k: K) ?V {
             const res = self.locate(k);
@@ -661,31 +682,34 @@ pub fn TreeWithOptions(comptime K: type, comptime V: type, comptime Cmp: fn (a: 
             return right;
         }
 
-        // getMin returns the minimum element of the tree.
+        // getMin returns an Entry for the smallest key.
+        // It returns null when the tree is empty.
         // Time complexity: O(1).
         pub fn getMin(self: *Self) ?Entry {
             if (self.min) |min| {
                 return Entry{
-                    .k = min.data().k,
-                    .v = &min.data().v,
+                    .Key = min.data().k,
+                    .Value = &min.data().v,
                 };
             }
             return null;
         }
 
-        // getMax returns the maximum element of the tree.
+        // getMax returns an Entry for the largest key.
+        // It returns null when the tree is empty.
         // Time complexity: O(1).
         pub fn getMax(self: *Self) ?Entry {
             if (self.max) |max| {
                 return Entry{
-                    .k = max.data().k,
-                    .v = &max.data().v,
+                    .Key = max.data().k,
+                    .Value = &max.data().v,
                 };
             }
             return null;
         }
 
-        // ascendFromStart returns an iterator pointing to the first element.
+        // ascendFromStart returns an iterator pointing to the smallest key.
+        // For an empty tree, the returned iterator has no value.
         // Time complexity: O(1).
         pub fn ascendFromStart(self: *Self) Iterator {
             return Iterator{
@@ -694,7 +718,8 @@ pub fn TreeWithOptions(comptime K: type, comptime V: type, comptime Cmp: fn (a: 
             };
         }
 
-        // descendFromEnd returns an iterator pointing to the last element.
+        // descendFromEnd returns an iterator pointing to the largest key.
+        // For an empty tree, the returned iterator has no value.
         // Time complexity: O(1).
         pub fn descendFromEnd(self: *Self) Iterator {
             return Iterator{
@@ -703,8 +728,9 @@ pub fn TreeWithOptions(comptime K: type, comptime V: type, comptime Cmp: fn (a: 
             };
         }
 
-        // deleteIterator deletes an iterator from the tree and returns
-        // an iterator to the next element.
+        // deleteIterator deletes the element pointed to by the iterator and
+        // returns an iterator to the next larger key.
+        // The given iterator must belong to this tree.
         pub fn deleteIterator(self: *Self, it: Iterator) Iterator {
             std.debug.assert(it.tree == self);
             const loc = it.loc orelse return it;
@@ -716,7 +742,8 @@ pub fn TreeWithOptions(comptime K: type, comptime V: type, comptime Cmp: fn (a: 
             };
         }
 
-        // get returns a value for key k.
+        // get returns a pointer to the value for the given key.
+        // It returns null when the key is not present.
         // Time complexity: O(logn).
         pub fn get(self: *Self, k: K) ?*V {
             const res = self.locate(k);
@@ -728,21 +755,21 @@ pub fn TreeWithOptions(comptime K: type, comptime V: type, comptime Cmp: fn (a: 
             return null;
         }
 
-        // at returns a an entry at the ith position of the sorted array.
-        // Panics if position >= tree.Len().
+        // at returns an Entry at the given sorted position.
+        // Panics if position >= len().
         // Time complexity:
         //  O(logn) - if children node counts are enabled.
         //  O(n) - otherwise.
         pub fn at(self: *Self, pos: usize) Entry {
             var loc = self.locateAt(pos);
             return Entry{
-                .k = loc.data().k,
-                .v = &loc.data().v,
+                .Key = loc.data().k,
+                .Value = &loc.data().v,
             };
         }
 
-        // ascendAt returns an iterator pointing to the ith element.
-        // Panics if position >= tree.Len().
+        // ascendAt returns an iterator pointing to the given sorted position.
+        // Panics if position >= len().
         // Time complexity:
         //  O(logn) - if children node counts are enabled.
         //  O(n) - otherwise.
@@ -754,14 +781,9 @@ pub fn TreeWithOptions(comptime K: type, comptime V: type, comptime Cmp: fn (a: 
             };
         }
 
-        // KV is a key-value pair.
-        pub const KV = struct {
-            Key: K,
-            Value: V,
-        };
-
-        // deleteAt deletes a node at the given position.
-        // Panics if position >= tree.Len().
+        // deleteAt deletes the node at the given sorted position.
+        // It returns an owned copy of the removed key and value.
+        // Panics if position >= len().
         // Time complexity:
         //  O(logn) - if children node counts are enabled.
         //  O(n) - otherwise.
@@ -1083,13 +1105,13 @@ test "tree insert" {
         const min = t.getMin();
         try std.testing.expect(min != null);
         const exp: i64 = 0;
-        try std.testing.expectEqual(exp, min.?.k);
-        try std.testing.expectEqual(exp, min.?.v.*);
+        try std.testing.expectEqual(exp, min.?.Key);
+        try std.testing.expectEqual(exp, min.?.Value.*);
 
         const max = t.getMax();
         try std.testing.expect(max != null);
-        try std.testing.expectEqual(i, max.?.k);
-        try std.testing.expectEqual(i, max.?.v.*);
+        try std.testing.expectEqual(i, max.?.Key);
+        try std.testing.expectEqual(i, max.?.Value.*);
 
         try checkHeightAndBalance(
             TreeType,
@@ -1218,8 +1240,8 @@ test "delete min" {
     i = 0;
     while (i <= 128) {
         const e = t.getMin();
-        try std.testing.expectEqual(i, e.?.k);
-        try std.testing.expectEqual(i, e.?.v.*);
+        try std.testing.expectEqual(i, e.?.Key);
+        try std.testing.expectEqual(i, e.?.Value.*);
         try std.testing.expectEqual(i, t.delete(i).?);
         i += 1;
     }
@@ -1242,8 +1264,8 @@ test "delete max" {
     i = 0;
     while (i <= 128) {
         const e = t.getMax();
-        try std.testing.expectEqual(128 - i, e.?.k);
-        try std.testing.expectEqual(128 - i, e.?.v.*);
+        try std.testing.expectEqual(128 - i, e.?.Key);
+        try std.testing.expectEqual(128 - i, e.?.Value.*);
         try std.testing.expectEqual(128 - i, t.delete(128 - i).?);
         i += 1;
     }
@@ -1267,8 +1289,8 @@ test "tree at_countChildren" {
     i = 0;
     while (i <= 128) {
         const e = t.at(@as(usize, @intCast(i)));
-        try std.testing.expectEqual(i, e.k);
-        try std.testing.expectEqual(i, e.v.*);
+        try std.testing.expectEqual(i, e.Key);
+        try std.testing.expectEqual(i, e.Value.*);
         i += 1;
     }
 }
@@ -1289,8 +1311,8 @@ test "tree at_nocountChildren" {
     i = 0;
     while (i <= 128) {
         const e = t.at(@as(usize, @intCast(i)));
-        try std.testing.expectEqual(i, e.k);
-        try std.testing.expectEqual(i, e.v.*);
+        try std.testing.expectEqual(i, e.Key);
+        try std.testing.expectEqual(i, e.Value.*);
         i += 1;
     }
 }
@@ -1347,8 +1369,8 @@ test "tree iterator" {
     i = 0;
     while (i < 128) {
         const e = it.value();
-        try std.testing.expectEqual(i, e.?.k);
-        try std.testing.expectEqual(i, e.?.v.*);
+        try std.testing.expectEqual(i, e.?.Key);
+        try std.testing.expectEqual(i, e.?.Value.*);
         it.next();
         i += 1;
     }
@@ -1358,8 +1380,8 @@ test "tree iterator" {
     i = 127;
     while (i >= 0) {
         const e = it.value();
-        try std.testing.expectEqual(i, e.?.k);
-        try std.testing.expectEqual(i, e.?.v.*);
+        try std.testing.expectEqual(i, e.?.Key);
+        try std.testing.expectEqual(i, e.?.Value.*);
         it.prev();
         i -= 1;
     }
@@ -1375,8 +1397,8 @@ test "tree iterator" {
     i = 0;
     while (i < 64) {
         const e = it.value();
-        try std.testing.expectEqual(i + 64, e.?.k);
-        try std.testing.expectEqual(i + 64, e.?.v.*);
+        try std.testing.expectEqual(i + 64, e.?.Key);
+        try std.testing.expectEqual(i + 64, e.?.Value.*);
         it = t.deleteIterator(it);
         i += 1;
     }
@@ -1385,8 +1407,8 @@ test "tree iterator" {
     i = 0;
     while (i < 64) {
         const e = it.value();
-        try std.testing.expectEqual(i, e.?.k);
-        try std.testing.expectEqual(i, e.?.v.*);
+        try std.testing.expectEqual(i, e.?.Key);
+        try std.testing.expectEqual(i, e.?.Value.*);
         it = t.deleteIterator(it);
         i += 1;
     }
@@ -1410,14 +1432,14 @@ test "tree ascendAt" {
     while (i < 128) {
         var it = t.ascendAt(@as(usize, @intCast(i)));
         var e = it.value();
-        try std.testing.expectEqual(i, e.?.k);
-        try std.testing.expectEqual(i, e.?.v.*);
+        try std.testing.expectEqual(i, e.?.Key);
+        try std.testing.expectEqual(i, e.?.Value.*);
         var j = i - 1;
         while (j >= 0) {
             it.prev();
             e = it.value();
-            try std.testing.expectEqual(j, e.?.k);
-            try std.testing.expectEqual(j, e.?.v.*);
+            try std.testing.expectEqual(j, e.?.Key);
+            try std.testing.expectEqual(j, e.?.Value.*);
             j -= 1;
         }
         it = t.ascendAt(@as(usize, @intCast(i)));
@@ -1425,8 +1447,8 @@ test "tree ascendAt" {
         while (j < t.len()) {
             it.next();
             e = it.value();
-            try std.testing.expectEqual(j, e.?.k);
-            try std.testing.expectEqual(j, e.?.v.*);
+            try std.testing.expectEqual(j, e.?.Key);
+            try std.testing.expectEqual(j, e.?.Value.*);
             j += 1;
         }
         i += 1;
