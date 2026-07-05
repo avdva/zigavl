@@ -2,7 +2,7 @@
 A self-balancing binary [AVL](https://en.wikipedia.org/wiki/AVL_tree) tree written in Zig.
 
 # Presentation
-To use this library, you need at least Zig 0.13.x.
+To use this library, you need at least Zig 0.16.x.
 
 ## Badges
 
@@ -62,7 +62,7 @@ fn i64Cmp(a: i64, b: i64) math.Order {
 }
 
 pub fn main() !void {
-    var gpa = std.heap.GeneralPurposeAllocator(.{}){};
+    var gpa = std.heap.DebugAllocator(.{}){};
     defer _ = gpa.detectLeaks();
     // first, create an i64-->i64 tree
     const TreeType = zigavl.TreeWithOptions(i64, i64, i64Cmp, .{ .countChildren = true });
