@@ -19,12 +19,12 @@ test "test pub decls" {
     _ = try t.insert(0, 0);
     var it = t.ascendFromStart();
     const min = t.getMin().?;
-    try std.testing.expectEqual(it.value().?.k, min.k);
+    try std.testing.expectEqual(it.value().?.Key, min.Key);
     const max = t.getMax().?;
     it = t.descendFromEnd();
-    try std.testing.expectEqual(it.value().?.k, max.k);
-    try std.testing.expectEqual(@as(i64, 0), t.at(0).k);
-    try std.testing.expectEqual(@as(i64, 0), t.at(0).v.*);
+    try std.testing.expectEqual(it.value().?.Key, max.Key);
+    try std.testing.expectEqual(@as(i64, 0), t.at(0).Key);
+    try std.testing.expectEqual(@as(i64, 0), t.at(0).Value.*);
     try std.testing.expectEqual(@as(i64, 0), t.delete(0).?);
     try std.testing.expectEqual(@as(usize, 0), t.len());
 }
@@ -43,10 +43,10 @@ test "tree example usage" {
         i -= 1;
     }
     // get min and max
-    if (t.getMin().?.k != 0) {
+    if (t.getMin().?.Key != 0) {
         @panic("bad min");
     }
-    if (t.getMax().?.k != 10) {
+    if (t.getMax().?.Key != 10) {
         @panic("bad max");
     }
     // get an element by it's key
@@ -57,10 +57,10 @@ test "tree example usage" {
     var it = t.ascendFromStart();
     i = 0;
     while (it.value()) |e| {
-        if (e.k != i) {
+        if (e.Key != i) {
             @panic("invalid key");
         }
-        if (e.v.* != i) {
+        if (e.Value.* != i) {
             @panic("invalid value");
         }
         i += 1;
@@ -68,7 +68,7 @@ test "tree example usage" {
     }
     //delete iterator
     var second_it = t.deleteIterator(t.ascendFromStart());
-    if (second_it.value().?.k != 1 or second_it.value().?.v.* != 1) {
+    if (second_it.value().?.Key != 1 or second_it.value().?.Value.* != 1) {
         @panic("invalid deleteIterator result");
     }
     // delete by key
@@ -84,7 +84,7 @@ test "tree example usage" {
     // ascend from pos.
     it = t.ascendAt(3);
     if (it.value()) |val| {
-        if (val.k != 6) {
+        if (val.Key != 6) {
             @panic("invalid key");
         }
     } else {

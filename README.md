@@ -35,11 +35,19 @@ pub fn delete(self: *Self, k: K) ?V
 pub fn deleteIterator(self: *Self, it: Iterator) Iterator
 
 // find:
+pub const Entry = struct {
+    Key: K,
+    Value: *V,
+};
 pub fn getMin(self: *Self) ?Entry
 pub fn getMax(self: *Self) ?Entry
 pub fn get(self: *Self, k: K) ?*V
 
 // array-style access:
+pub const KV = struct {
+    Key: K,
+    Value: V,
+};
 pub fn at(self: *Self, pos: usize) Entry
 pub fn deleteAt(self: *Self, pos: usize) KV
 
@@ -49,6 +57,11 @@ pub fn ascendAt(self: *Self, pos: usize) Iterator
 pub fn descendFromEnd(self: *Self) Iterator
 
 ```
+
+Notes:
+- `countChildren = true` enables `O(logn)` positional access. It stores child counts as `u32`, so trees larger than `maxInt(u32) + 1` elements are not supported in this mode.
+- `Entry.Value` points into the tree and can be used to update the stored value. `KV.Value` is an owned value copied out from a deleted node.
+- Iterators are valid only for the tree that created them. If the node pointed to by an iterator is deleted, that iterator becomes invalid; use the iterator returned by `deleteIterator`.
 
 Example:
 ```zig
@@ -75,10 +88,10 @@ pub fn main() !void {
         i -= 1;
     }
     // get min and max
-    if (t.getMin().?.k != 0) {
+    if (t.getMin().?.Key != 0) {
         @panic("bad min");
     }
-    if (t.getMax().?.k != 10) {
+    if (t.getMax().?.Key != 10) {
         @panic("bad max");
     }
     // get an element by it's key
@@ -89,10 +102,10 @@ pub fn main() !void {
     var it = t.ascendFromStart();
     i = 0;
     while (it.value()) |e| {
-        if (e.k != i) {
+        if (e.Key != i) {
             @panic("invalid key");
         }
-        if (e.v.* != i) {
+        if (e.Value.* != i) {
             @panic("invalid value");
         }
         i += 1;
@@ -100,7 +113,7 @@ pub fn main() !void {
     }
     //delete iterator
     var second_it = t.deleteIterator(t.ascendFromStart());
-    if (second_it.value().?.k != 1 or second_it.value().?.v.* != 1) {
+    if (second_it.value().?.Key != 1 or second_it.value().?.Value.* != 1) {
         @panic("invalid deleteIterator result");
     }
     // delete by key
@@ -116,7 +129,7 @@ pub fn main() !void {
     // ascend from pos.
     it = t.ascendAt(3);
     if (it.value()) |val| {
-        if (val.k != 6) {
+        if (val.Key != 6) {
             @panic("invalid key");
         }
     } else {
