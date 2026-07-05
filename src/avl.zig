@@ -1,155 +1,23 @@
 const std = @import("std");
 const math = std.math;
+const direction = @import("direction.zig").direction;
+const ptrLocationCache = @import("ptr_location.zig").LocationCache;
+const llLocationCache = @import("ll_location.zig").LocationCache;
+const arrayLocationCache = @import("array_location.zig").LocationCache;
 
-const direction = enum {
-    left,
-    center,
-    right,
-
-    fn invert(self: direction) direction {
-        switch (self) {
-            .left => return .right,
-            .right => return .left,
-            .center => return .center,
-        }
-    }
+pub const NodeCacheType = enum(u8) {
+    PointerBased,
+    ListBased,
+    ArrayBased,
 };
-
-fn makeNodeData(comptime K: type, comptime V: type, comptime Tags: type) type {
-    return struct {
-        const Self = @This();
-        k: K = undefined,
-        v: V = undefined,
-        tags: Tags = undefined,
-        h: u8 = 0,
-
-        fn setHeight(self: *Self, h: u8) bool {
-            const old = self.h;
-            self.h = h;
-            return old != h;
-        }
-    };
-}
-
-fn makeNode(comptime K: type, comptime V: type, comptime L: type, comptime Tags: type) type {
-    return struct {
-        const Self = @This();
-        const NodeData = makeNodeData(K, V, Tags);
-
-        data: NodeData,
-        left: ?L,
-        right: ?L,
-        parent: ?L,
-
-        fn init() Self {
-            return Self{
-                .data = NodeData{},
-                .left = null,
-                .right = null,
-                .parent = null,
-            };
-        }
-    };
-}
-
-fn makePtrLocationType(comptime K: type, comptime V: type, comptime Tags: type) type {
-    return struct {
-        const Self = @This();
-        const Node = makeNode(K, V, Self, Tags);
-        const NodeData = Node.NodeData;
-
-        ptr: *Node,
-
-        fn init(ptr: *Node) Self {
-            return Self{
-                .ptr = ptr,
-            };
-        }
-
-        fn eq(self: *const Self, other: Self) bool {
-            return self.ptr == other.ptr;
-        }
-
-        fn data(self: *const Self) *NodeData {
-            return &self.ptr.data;
-        }
-
-        fn child(self: *const Self, comptime dir: direction) ?Self {
-            switch (dir) {
-                .left => return self.ptr.*.left,
-                .right => return self.ptr.*.right,
-                else => unreachable,
-            }
-        }
-
-        fn setChild(self: *Self, comptime dir: direction, loc: ?Self) void {
-            switch (dir) {
-                .left => self.ptr.*.left = loc,
-                .right => self.ptr.*.right = loc,
-                else => unreachable,
-            }
-        }
-
-        fn parent(self: *const Self) ?Self {
-            return self.ptr.*.parent;
-        }
-
-        fn setParent(self: *Self, p: ?Self) void {
-            self.ptr.*.parent = p;
-        }
-    };
-}
-
-fn locationCache(comptime K: type, comptime V: type, comptime Tags: type) type {
-    return struct {
-        const Self = @This();
-        const Location = makePtrLocationType(K, V, Tags);
-
-        a: std.mem.Allocator,
-
-        fn init(a: std.mem.Allocator) Self {
-            return Self{
-                .a = a,
-            };
-        }
-
-        const allocAddrs = blk: {
-            var aa: std.heap.ArenaAllocator = undefined;
-            const aaa = aa.allocator();
-            var fba: std.heap.FixedBufferAllocator = undefined;
-            const fbaa = fba.allocator();
-            break :blk [_]*const anyopaque{
-                @ptrCast(@alignCast(aaa.vtable.alloc)),
-                @ptrCast(@alignCast(fbaa.vtable.alloc)),
-            };
-        };
-
-        fn fastDeinitAllowed(self: *Self) bool {
-            const ourAllocAddr: *const anyopaque = @ptrCast(@alignCast(self.a.vtable.alloc));
-            inline for (allocAddrs) |ptr| {
-                if (ourAllocAddr == ptr) return true;
-            }
-            return false;
-        }
-
-        fn create(self: *Self) !Location {
-            const node = try self.a.create(Location.Node);
-            node.* = Location.Node.init();
-            return Location.init(node);
-        }
-
-        fn destroy(self: *Self, loc: Location) void {
-            self.a.destroy(loc.ptr);
-        }
-    };
-}
 
 // Options defines some comptime parameters of the tree type.
 pub const Options = struct {
     // countChildren, if set, enables children counts for every node of the tree.
     // the number of children allows to locate a node by its position with a guaranteed complexity O(logn).
-    // With countChildren enabled, trees larger than maxInt(u32) + 1 elements are not supported.
     countChildren: bool = false,
+    nodeCacheType: NodeCacheType = .PointerBased,
+    debug: bool = false,
 };
 
 // InitOptions defines some runtime parameters of the tree instance.
@@ -188,7 +56,17 @@ pub fn TreeWithOptions(comptime K: type, comptime V: type, comptime Cmp: fn (a: 
 
         const KeyType = K;
         const ValueType = V;
-        const Cache = locationCache(K, V, Tags);
+        const Cache = blk: {
+            const cacheType = switch (options.nodeCacheType) {
+                .ListBased => llLocationCache(K, V, Tags),
+                .ArrayBased => arrayLocationCache(K, V, Tags),
+                .PointerBased => ptrLocationCache(K, V, Tags),
+            };
+            if (options.debug) {
+                break :blk TestLocationCache(cacheType);
+            }
+            break :blk cacheType;
+        };
         const Location = Cache.Location;
         const Comparer = Cmp;
         const TreeOptions = options;
@@ -198,20 +76,9 @@ pub fn TreeWithOptions(comptime K: type, comptime V: type, comptime Cmp: fn (a: 
             dir: direction,
         };
 
-        // Entry is a view of an element that still lives in the tree.
-        // Value points into the tree and can be used to update the stored value.
-        // The pointer is valid until the corresponding node is deleted or the
-        // tree is deinitialized.
         pub const Entry = struct {
             Key: K,
             Value: *V,
-        };
-
-        // KV is an owned key-value pair returned by deleteAt.
-        // Unlike Entry, Value is copied out because the node has been removed.
-        pub const KV = struct {
-            Key: K,
-            Value: V,
         };
 
         fn goLeft(loc: Location) Location {
@@ -400,9 +267,6 @@ pub fn TreeWithOptions(comptime K: type, comptime V: type, comptime Cmp: fn (a: 
         }
 
         // Iterator traverses the tree.
-        // An iterator is valid only for the tree that created it. If the node
-        // pointed to by the iterator is deleted, that iterator becomes invalid;
-        // use the iterator returned by deleteIterator instead.
         pub const Iterator = struct {
             tree: *Self,
             loc: ?Location,
@@ -414,22 +278,18 @@ pub fn TreeWithOptions(comptime K: type, comptime V: type, comptime Cmp: fn (a: 
                 };
             }
 
-            // next advances the iterator to the next larger key.
             pub fn next(self: *Iterator) void {
                 if (self.loc) |l| {
                     self.loc = nextInOrderLocation(l);
                 }
             }
 
-            // prev advances the iterator to the next smaller key.
             pub fn prev(self: *Iterator) void {
                 if (self.loc) |l| {
                     self.loc = prevInOrderLocation(l);
                 }
             }
 
-            // value returns the element currently pointed to by the iterator.
-            // It returns null when the iterator is past either end of the tree.
             pub fn value(self: *const Iterator) ?Entry {
                 if (self.loc) |l| {
                     return Entry{
@@ -448,15 +308,15 @@ pub fn TreeWithOptions(comptime K: type, comptime V: type, comptime Cmp: fn (a: 
         min: ?Location,
         max: ?Location,
 
-        // init initializes an empty tree using the given allocator.
-        pub fn init(a: std.mem.Allocator) Self {
+        // init initializes the tree.
+        pub fn init(a: std.mem.Allocator) !Self {
             return Self.initWithOptions(a, .{});
         }
 
-        // initWithOptions initializes an empty tree with runtime options.
-        pub fn initWithOptions(a: std.mem.Allocator, io: InitOptions) Self {
+        // initWithOptions initializes the tree.
+        pub fn initWithOptions(a: std.mem.Allocator, io: InitOptions) !Self {
             return Self{
-                .lc = Cache.init(a),
+                .lc = try Cache.init(a),
                 .length = 0,
                 .root = null,
                 .min = null,
@@ -466,11 +326,11 @@ pub fn TreeWithOptions(comptime K: type, comptime V: type, comptime Cmp: fn (a: 
         }
 
         // deinit releases the memory taken by all the nodes.
-        // It does not destroy or deinitialize stored keys or values.
         // Time complexity:
         //  O(1) - if fast deinit is enabled (see InitOptions.allowFastDeinit).
         //  O(n) - otherwise.
         pub fn deinit(self: *Self) void {
+            defer self.lc.deinit();
             if (self.io.allowFastDeinit == .always or self.io.allowFastDeinit == .auto and self.lc.fastDeinitAllowed()) {
                 return;
             }
@@ -484,7 +344,7 @@ pub fn TreeWithOptions(comptime K: type, comptime V: type, comptime Cmp: fn (a: 
             }
         }
 
-        // len returns the number of elements currently stored in the tree.
+        // len returns the number of elements.
         pub fn len(self: *const Self) usize {
             return self.length;
         }
@@ -502,17 +362,17 @@ pub fn TreeWithOptions(comptime K: type, comptime V: type, comptime Cmp: fn (a: 
             return new_loc;
         }
 
-        // InsertResult is returned from functions that may insert data.
-        // inserted is true when a new node was added.
-        // v points to the stored value, either existing before the call or newly added.
+        // InsertResult is returned from any function that inserts data to the tree.
+        //  inserted == true if a new node was added to the tree.
+        //  v - a pointer to the data, existing before the call, or the newly added.
         pub const InsertResult = struct {
             inserted: bool,
             v: *V,
         };
 
-        // getOrEmplace inserts a new key-value pair into the tree.
-        // If the key is already present, the existing value is returned.
-        // Otherwise, ctor initializes the newly created value in place.
+        // getOrEmplace inserts a new kv pair into the tree.
+        //  - if tree already contains 'k', the function returns InsertResult{.inserted = false, .v = ptr_to_existing_value}
+        //  - otherwise calls ctor with given args to initialise a newly created value.
         // Time complexity: O(logn).
         pub fn getOrEmplace(self: *Self, k: K, ctor: fn (v: *V, args: anytype) void, args: anytype) !InsertResult {
             const res = self.locate(k);
@@ -533,15 +393,14 @@ pub fn TreeWithOptions(comptime K: type, comptime V: type, comptime Cmp: fn (a: 
             };
         }
 
-        // getOrInsert inserts a new key-value pair if the key is not present.
-        // If the key already exists, the stored value is left unchanged.
+        // getOrInsert inserts a new kv pair into the tree if tke key is not present.
         // Time complexity: O(logn).
         pub fn getOrInsert(self: *Self, k: K, v: V) !InsertResult {
             return self.doInsert(k, v, false);
         }
 
-        // insert inserts or replaces a key-value pair.
-        // If the key is already present, its value is updated.
+        // insert inserts a node into the tree.
+        // If the key `k` was present in the tree, node's value is updated to `v`.
         // Time complexity: O(logn).
         pub fn insert(self: *Self, k: K, v: V) !InsertResult {
             return self.doInsert(k, v, true);
@@ -603,8 +462,8 @@ pub fn TreeWithOptions(comptime K: type, comptime V: type, comptime Cmp: fn (a: 
             self.lc.destroy(loc);
         }
 
-        // delete removes a key from the tree.
-        // It returns the removed value if the key was present.
+        // delete deletes a node from the tree.
+        // Returns the value associated with k, if the node was present in the tree.
         // Time complexity: O(logn).
         pub fn delete(self: *Self, k: K) ?V {
             const res = self.locate(k);
@@ -682,8 +541,7 @@ pub fn TreeWithOptions(comptime K: type, comptime V: type, comptime Cmp: fn (a: 
             return right;
         }
 
-        // getMin returns an Entry for the smallest key.
-        // It returns null when the tree is empty.
+        // getMin returns the minimum element of the tree.
         // Time complexity: O(1).
         pub fn getMin(self: *Self) ?Entry {
             if (self.min) |min| {
@@ -695,8 +553,7 @@ pub fn TreeWithOptions(comptime K: type, comptime V: type, comptime Cmp: fn (a: 
             return null;
         }
 
-        // getMax returns an Entry for the largest key.
-        // It returns null when the tree is empty.
+        // getMax returns the maximum element of the tree.
         // Time complexity: O(1).
         pub fn getMax(self: *Self) ?Entry {
             if (self.max) |max| {
@@ -708,8 +565,7 @@ pub fn TreeWithOptions(comptime K: type, comptime V: type, comptime Cmp: fn (a: 
             return null;
         }
 
-        // ascendFromStart returns an iterator pointing to the smallest key.
-        // For an empty tree, the returned iterator has no value.
+        // ascendFromStart returns an iterator pointing to the first element.
         // Time complexity: O(1).
         pub fn ascendFromStart(self: *Self) Iterator {
             return Iterator{
@@ -718,8 +574,7 @@ pub fn TreeWithOptions(comptime K: type, comptime V: type, comptime Cmp: fn (a: 
             };
         }
 
-        // descendFromEnd returns an iterator pointing to the largest key.
-        // For an empty tree, the returned iterator has no value.
+        // descendFromEnd returns an iterator pointing to the last element.
         // Time complexity: O(1).
         pub fn descendFromEnd(self: *Self) Iterator {
             return Iterator{
@@ -728,9 +583,8 @@ pub fn TreeWithOptions(comptime K: type, comptime V: type, comptime Cmp: fn (a: 
             };
         }
 
-        // deleteIterator deletes the element pointed to by the iterator and
-        // returns an iterator to the next larger key.
-        // The given iterator must belong to this tree.
+        // deleteIterator deletes an iterator from the tree and returns
+        // an iterator to the next element.
         pub fn deleteIterator(self: *Self, it: Iterator) Iterator {
             std.debug.assert(it.tree == self);
             const loc = it.loc orelse return it;
@@ -742,8 +596,7 @@ pub fn TreeWithOptions(comptime K: type, comptime V: type, comptime Cmp: fn (a: 
             };
         }
 
-        // get returns a pointer to the value for the given key.
-        // It returns null when the key is not present.
+        // get returns a value for key k.
         // Time complexity: O(logn).
         pub fn get(self: *Self, k: K) ?*V {
             const res = self.locate(k);
@@ -755,8 +608,8 @@ pub fn TreeWithOptions(comptime K: type, comptime V: type, comptime Cmp: fn (a: 
             return null;
         }
 
-        // at returns an Entry at the given sorted position.
-        // Panics if position >= len().
+        // at returns a an entry at the ith position of the sorted array.
+        // Panics if position >= tree.Len().
         // Time complexity:
         //  O(logn) - if children node counts are enabled.
         //  O(n) - otherwise.
@@ -768,8 +621,8 @@ pub fn TreeWithOptions(comptime K: type, comptime V: type, comptime Cmp: fn (a: 
             };
         }
 
-        // ascendAt returns an iterator pointing to the given sorted position.
-        // Panics if position >= len().
+        // ascendAt returns an iterator pointing to the ith element.
+        // Panics if position >= tree.Len().
         // Time complexity:
         //  O(logn) - if children node counts are enabled.
         //  O(n) - otherwise.
@@ -781,9 +634,14 @@ pub fn TreeWithOptions(comptime K: type, comptime V: type, comptime Cmp: fn (a: 
             };
         }
 
-        // deleteAt deletes the node at the given sorted position.
-        // It returns an owned copy of the removed key and value.
-        // Panics if position >= len().
+        // KV is a key-value pair.
+        pub const KV = struct {
+            Key: K,
+            Value: V,
+        };
+
+        // deleteAt deletes a node at the given position.
+        // Panics if position >= tree.Len().
         // Time complexity:
         //  O(logn) - if children node counts are enabled.
         //  O(n) - otherwise.
@@ -1023,7 +881,7 @@ fn i64Cmp(a: i64, b: i64) math.Order {
 test "empty tree" {
     const a = std.testing.allocator;
     const TreeType = TreeWithOptions(i64, i64, i64Cmp, .{ .countChildren = true });
-    var t = TreeType.init(a);
+    var t = try TreeType.init(a);
     defer t.deinit();
 
     var it = t.ascendFromStart();
@@ -1035,7 +893,7 @@ test "empty tree" {
 test "tree getOrInsert" {
     const a = std.testing.allocator;
     const TreeType = Tree(i64, i64, i64Cmp);
-    var t = TreeType.init(a);
+    var t = try TreeType.init(a);
     defer t.deinit();
     var ir = t.insert(1, 1) catch unreachable;
     try std.testing.expectEqual(true, ir.inserted);
@@ -1055,7 +913,7 @@ test "tree getOrInsert" {
 test "tree getOrEmplace" {
     const a = std.testing.allocator;
     const TreeType = Tree(i64, i64, i64Cmp);
-    var t = TreeType.init(a);
+    var t = try TreeType.init(a);
     defer t.deinit();
     var i: i64 = 0;
     const ctor = struct {
@@ -1094,7 +952,7 @@ test "tree getOrEmplace" {
 test "tree insert" {
     const a = std.testing.allocator;
     const TreeType = Tree(i64, i64, i64Cmp);
-    var t = TreeType.init(a);
+    var t = try TreeType.init(a);
     defer t.deinit();
     var i: i64 = 0;
     while (i < 128) {
@@ -1153,7 +1011,7 @@ test "tree insert" {
 test "tree delete" {
     const a = std.testing.allocator;
     const TreeType = TreeWithOptions(i64, i64, i64Cmp, .{ .countChildren = true });
-    var t = TreeType.init(a);
+    var t = try TreeType.init(a);
     defer t.deinit();
     var exp_len: usize = 0;
     try std.testing.expectEqual(exp_len, t.len());
@@ -1228,7 +1086,7 @@ test "tree delete" {
 test "delete min" {
     const a = std.testing.allocator;
     const TreeType = TreeWithOptions(i64, i64, i64Cmp, .{ .countChildren = true });
-    var t = TreeType.init(a);
+    var t = try TreeType.init(a);
     defer t.deinit();
 
     var i: i64 = 0;
@@ -1252,7 +1110,7 @@ test "delete min" {
 test "delete max" {
     const a = std.testing.allocator;
     const TreeType = TreeWithOptions(i64, i64, i64Cmp, .{ .countChildren = true });
-    var t = TreeType.init(a);
+    var t = try TreeType.init(a);
     defer t.deinit();
 
     var i: i64 = 0;
@@ -1276,7 +1134,7 @@ test "delete max" {
 test "tree at_countChildren" {
     const a = std.testing.allocator;
     const TreeType = TreeWithOptions(i64, i64, i64Cmp, .{ .countChildren = true });
-    var t = TreeType.init(a);
+    var t = try TreeType.init(a);
     defer t.deinit();
 
     var i: i64 = 0;
@@ -1297,8 +1155,8 @@ test "tree at_countChildren" {
 
 test "tree at_nocountChildren" {
     const a = std.testing.allocator;
-    const TreeType = TreeWithOptions(i64, i64, i64Cmp, .{ .countChildren = false });
-    var t = TreeType.init(a);
+    const TreeType = TreeWithOptions(i64, i64, i64Cmp, .{ .countChildren = true });
+    var t = try TreeType.init(a);
     defer t.deinit();
 
     var i: i64 = 0;
@@ -1320,7 +1178,7 @@ test "tree at_nocountChildren" {
 test "tree deleteAt" {
     const a = std.testing.allocator;
     const TreeType = TreeWithOptions(i64, i64, i64Cmp, .{ .countChildren = true });
-    var t = TreeType.init(a);
+    var t = try TreeType.init(a);
     defer t.deinit();
 
     var i: i64 = 0;
@@ -1356,7 +1214,7 @@ test "tree deleteAt" {
 test "tree iterator" {
     const a = std.testing.allocator;
     const TreeType = TreeWithOptions(i64, i64, i64Cmp, .{ .countChildren = true });
-    var t = TreeType.init(a);
+    var t = try TreeType.init(a);
     defer t.deinit();
 
     var i: i64 = 0;
@@ -1419,7 +1277,7 @@ test "tree iterator" {
 test "tree ascendAt" {
     const a = std.testing.allocator;
     const TreeType = TreeWithOptions(i64, i64, i64Cmp, .{ .countChildren = true });
-    var t = TreeType.init(a);
+    var t = try TreeType.init(a);
     defer t.deinit();
 
     var i: i64 = 0;
@@ -1455,12 +1313,12 @@ test "tree ascendAt" {
     }
 }
 
-test "tree random" {
+fn testTreeRandom(comptime options: Options) !void {
     var a = std.testing.allocator;
-    const TreeType = TreeWithOptions(i64, i64, i64Cmp, .{ .countChildren = true });
-    var t = TreeType.init(a);
+    const TreeType = TreeWithOptions(i64, i64, i64Cmp, options);
+    var t = try TreeType.init(a);
     defer t.deinit();
-    var arr = try a.alloc(i64, 2048);
+    var arr = try a.alloc(i64, 1024);
     for (arr, 0..) |_, idx| {
         arr[idx] = @as(i64, @intCast(idx));
     }
@@ -1486,57 +1344,86 @@ test "tree random" {
     }
 }
 
-const failingFreeAllocator = struct {
-    ptr: *anyopaque,
-    vtable: std.mem.Allocator.VTable,
+test "tree random (pointer cache)" {
+    try testTreeRandom(.{ .countChildren = true, .nodeCacheType = .PointerBased });
+}
 
-    fn free(_: *anyopaque, _: []u8, _: std.mem.Alignment, _: usize) void {
-        @panic("should not happen");
-    }
+test "tree random (list cache)" {
+    try testTreeRandom(.{ .countChildren = true, .nodeCacheType = .ListBased });
+}
 
-    fn init(a: std.mem.Allocator) failingFreeAllocator {
-        return failingFreeAllocator{ .ptr = a.ptr, .vtable = .{
-            .alloc = a.vtable.alloc,
-            .free = free,
-            .remap = a.vtable.remap,
-            .resize = a.vtable.resize,
-        } };
-    }
+test "tree random (array cache)" {
+    try testTreeRandom(.{ .countChildren = true, .nodeCacheType = .ArrayBased });
+}
 
-    fn allocator(self: *failingFreeAllocator) std.mem.Allocator {
-        return std.mem.Allocator{
-            .ptr = self.ptr,
-            .vtable = &self.vtable,
-        };
-    }
-};
+fn TestLocationCache(comptime underlying: type) type {
+    return struct {
+        const Self = @This();
+        pub const Location = underlying.Location;
+
+        u: underlying,
+
+        destroyHook: ?*const fn (loc: Location) void,
+
+        fn init(a: std.mem.Allocator) !Self {
+            return Self{
+                .u = try underlying.init(a),
+                .destroyHook = null,
+            };
+        }
+
+        fn deinit(_: *Self) void {}
+
+        fn create(self: *Self) !Location {
+            return self.u.create();
+        }
+
+        pub fn destroy(self: *Self, loc: Location) void {
+            if (self.destroyHook) |dt| {
+                dt(loc);
+            }
+            self.u.destroy(loc);
+        }
+
+        pub fn fastDeinitAllowed(self: *Self) bool {
+            return self.u.fastDeinitAllowed();
+        }
+    };
+}
+
+fn testFastDeinit(io: InitOptions, a: std.mem.Allocator, comptime nct: NodeCacheType) !void {
+    const TreeType = TreeWithOptions(i64, i64, i64Cmp, .{
+        .nodeCacheType = nct,
+        .debug = true,
+    });
+    var t = try TreeType.initWithOptions(a, io);
+    defer t.deinit();
+    t.lc.destroyHook = struct {
+        fn doPanic(_: TreeType.Cache.Location) void {
+            @panic("message: []const u8");
+        }
+    }.doPanic;
+    _ = try t.insert(0, 0);
+    _ = try t.insert(1, 1);
+    _ = try t.insert(2, 2);
+}
 
 test "arena allocator: auto fast deinit" {
     var arena = std.heap.ArenaAllocator.init(std.testing.allocator);
     defer arena.deinit();
-    try testFastDeinit(.{ .allowFastDeinit = .auto }, arena.allocator());
+    try testFastDeinit(.{ .allowFastDeinit = .auto }, arena.allocator(), .PointerBased);
 }
 
 test "arena allocator: always fast deinit" {
     var arena = std.heap.ArenaAllocator.init(std.testing.allocator);
     defer arena.deinit();
-    try testFastDeinit(.{ .allowFastDeinit = .always }, arena.allocator());
+    try testFastDeinit(.{ .allowFastDeinit = .always }, arena.allocator(), .PointerBased);
 }
 
 test "fixed buffer allocator: auto fast deinit" {
-    var buff: [512]u8 = undefined;
+    var buff: [16 * 1024]u8 = undefined;
     var fb = std.heap.FixedBufferAllocator.init(&buff);
-    try testFastDeinit(.{ .allowFastDeinit = .auto }, fb.allocator());
-}
-
-fn testFastDeinit(io: InitOptions, a: std.mem.Allocator) !void {
-    const TreeType = TreeWithOptions(i64, i64, i64Cmp, .{});
-    var ta: failingFreeAllocator = failingFreeAllocator.init(a);
-    var t = TreeType.initWithOptions(ta.allocator(), io);
-    defer t.deinit();
-    _ = try t.insert(0, 0);
-    _ = try t.insert(1, 1);
-    _ = try t.insert(2, 2);
+    try testFastDeinit(.{ .allowFastDeinit = .auto }, fb.allocator(), .PointerBased);
 }
 
 fn checkHeightAndBalance(comptime T: type, loc: ?T.Location) !void {
@@ -1571,9 +1458,6 @@ fn recalcHeightAndBalance(comptime T: type, loc: ?T.Location) !recalcResult {
         result.r_count = rRes.r_count + rRes.l_count + 1;
     }
     try std.testing.expectEqual(result.height, l.data().h);
-    if (T.TreeOptions.countChildren) {
-        try std.testing.expectEqual(result.l_count + result.r_count, l.data().tags.childrenCount);
-    }
     if (T.balance(l) < -1 or T.balance(l) > 1) {
         return error{
             InvalidBalance,

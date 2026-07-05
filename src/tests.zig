@@ -1,6 +1,7 @@
 const std = @import("std");
 const math = std.math;
-const lib = @import("./lib.zig");
+const lib = @import("lib.zig");
+const ll = @import("linked_arraylist.zig");
 
 fn i64Cmp(a: i64, b: i64) math.Order {
     return math.order(a, b);
@@ -14,7 +15,7 @@ test "test pub decls" {
     };
     var aa = std.heap.ArenaAllocator.init(a);
     defer aa.deinit();
-    var t = TreeType.initWithOptions(aa.allocator(), options);
+    var t = try TreeType.initWithOptions(aa.allocator(), options);
     defer t.deinit();
     _ = try t.insert(0, 0);
     var it = t.ascendFromStart();
@@ -34,7 +35,7 @@ test "tree example usage" {
     defer _ = gpa.detectLeaks();
     // first, create an i64-->i64 tree
     const TreeType = lib.TreeWithOptions(i64, i64, i64Cmp, .{ .countChildren = true });
-    var t = TreeType.initWithOptions(gpa.allocator(), .{ .allowFastDeinit = .auto });
+    var t = try TreeType.initWithOptions(gpa.allocator(), .{ .allowFastDeinit = .auto });
     defer t.deinit();
     // add some elements
     var i: i64 = 10;
