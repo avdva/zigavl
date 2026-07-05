@@ -139,6 +139,14 @@ pub fn main() !void {
 
 ```
 
+## Benchmarks
+
+Run the basic benchmark suite with:
+
+```sh
+zig build bench -Doptimize=ReleaseFast
+```
+
 ## Contact
 
 [Aleksandr Demakin](mailto:alexander.demakin@gmail.com)
