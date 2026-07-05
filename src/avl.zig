@@ -190,6 +190,7 @@ pub fn TreeWithOptions(comptime K: type, comptime V: type, comptime Cmp: fn (a: 
         const Cache = locationCache(K, V, Tags);
         const Location = Cache.Location;
         const Comparer = Cmp;
+        const TreeOptions = options;
 
         const LocateResult = struct {
             loc: ?Location,
@@ -705,6 +706,7 @@ pub fn TreeWithOptions(comptime K: type, comptime V: type, comptime Cmp: fn (a: 
         // deleteIterator deletes an iterator from the tree and returns
         // an iterator to the next element.
         pub fn deleteIterator(self: *Self, it: Iterator) Iterator {
+            std.debug.assert(it.tree == self);
             const loc = it.loc orelse return it;
             const next = nextInOrderLocation(loc);
             self.deleteLocation(loc);
@@ -1273,7 +1275,7 @@ test "tree at_countChildren" {
 
 test "tree at_nocountChildren" {
     const a = std.testing.allocator;
-    const TreeType = TreeWithOptions(i64, i64, i64Cmp, .{ .countChildren = true });
+    const TreeType = TreeWithOptions(i64, i64, i64Cmp, .{ .countChildren = false });
     var t = TreeType.init(a);
     defer t.deinit();
 
@@ -1547,6 +1549,9 @@ fn recalcHeightAndBalance(comptime T: type, loc: ?T.Location) !recalcResult {
         result.r_count = rRes.r_count + rRes.l_count + 1;
     }
     try std.testing.expectEqual(result.height, l.data().h);
+    if (T.TreeOptions.countChildren) {
+        try std.testing.expectEqual(result.l_count + result.r_count, l.data().tags.childrenCount);
+    }
     if (T.balance(l) < -1 or T.balance(l) > 1) {
         return error{
             InvalidBalance,

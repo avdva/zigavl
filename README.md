@@ -6,7 +6,7 @@ To use this library, you need at least Zig 0.16.x.
 
 ## Badges
 
-![Build Status](https://img.shields.io/github/actions/workflow/status/ultd/base58-zig/test.yml?branch=main)
+![Build Status](https://img.shields.io/github/actions/workflow/status/avdva/zigavl/workflow.yml?branch=main)
 
 ## API
 ```zig
