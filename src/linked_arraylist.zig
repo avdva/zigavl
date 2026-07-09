@@ -1,13 +1,14 @@
 const std = @import("std");
+const address = @import("address.zig");
 const mem = std.mem;
 const math = std.math;
 const Allocator = mem.Allocator;
 const testing = std.testing;
 const assert = std.debug.assert;
 
-pub const Address = u32;
+pub const Address = address.Address;
 
-pub const InvalidAddr = math.maxInt(Address);
+pub const InvalidAddr = address.InvalidAddr;
 
 pub const Error = error{
     InvalidCapacity,
@@ -56,10 +57,15 @@ pub const Options = struct {
 
 pub fn LinkedArrayList(comptime T: type) type {
     return struct {
-        const Node = struct {
+        const UsedNode = struct {
             elem: T,
             left: Address,
             right: Address,
+        };
+
+        const Node = union {
+            used: UsedNode,
+            free: Address,
         };
 
         const Self = @This();
@@ -160,7 +166,7 @@ pub fn LinkedArrayList(comptime T: type) type {
 
         pub fn push(self: *Self, elem: T) Allocator.Error!Address {
             var new_node_addr: Address = self.takeNodeFromFreeList();
-            const new_node = Node{ .elem = elem, .left = self.tail_addr, .right = InvalidAddr };
+            const new_node = Node{ .used = .{ .elem = elem, .left = self.tail_addr, .right = InvalidAddr } };
             if (new_node_addr != InvalidAddr) { // use a node from the freelist
                 self.list.items[new_node_addr] = new_node;
             } else { // append new node.
@@ -168,7 +174,7 @@ pub fn LinkedArrayList(comptime T: type) type {
                 try self.list.append(self.allocator, new_node);
             }
             if (self.length > 0) { // there was at least one element. update its right index.
-                self.list.items[self.tail_addr].right = new_node_addr;
+                self.list.items[self.tail_addr].used.right = new_node_addr;
             } else { // the list was empty, we're the new head.
                 self.head_addr = new_node_addr;
             }
@@ -182,21 +188,14 @@ pub fn LinkedArrayList(comptime T: type) type {
                 return InvalidAddr;
             }
             const result = self.free_list_tail;
-            self.free_list_tail = self.list.items[self.free_list_tail].left;
+            self.free_list_tail = self.list.items[self.free_list_tail].free;
             self.free_list_size -= 1;
             return result;
         }
 
         fn addToFreeList(self: *Self, addr: Address) void {
-            var node = &self.list.items[addr];
-            node.right = InvalidAddr;
-            if (self.free_list_tail == InvalidAddr) {
-                node.left = InvalidAddr;
-                self.free_list_tail = addr;
-            } else {
-                node.left = self.free_list_tail;
-                self.free_list_tail = addr;
-            }
+            self.list.items[addr] = Node{ .free = self.free_list_tail };
+            self.free_list_tail = addr;
             self.free_list_size += 1;
         }
 
@@ -222,12 +221,12 @@ pub fn LinkedArrayList(comptime T: type) type {
         pub fn deleteAtAddr(self: *Self, addr: Address) T {
             assert(addr < self.list.items.len);
 
-            const node = &self.list.items[addr];
+            const node = &self.list.items[addr].used;
             const elem = node.elem;
 
             // deal with the right neighbor
             if (node.right != InvalidAddr) {
-                var right = &self.list.items[node.right];
+                var right = &self.list.items[node.right].used;
                 assert(right.left == addr);
                 right.left = node.left;
             } else { // removing tail
@@ -237,7 +236,7 @@ pub fn LinkedArrayList(comptime T: type) type {
 
             // deal with the left neighbor
             if (node.left != InvalidAddr) {
-                var left = &self.list.items[node.left];
+                var left = &self.list.items[node.left].used;
                 assert(left.right == addr);
                 left.right = node.right;
             } else { // removing head
@@ -294,7 +293,7 @@ pub fn LinkedArrayList(comptime T: type) type {
             self.free_list_size = @max(new_len - self.length, 0);
             if (self.free_list_size > 0) {
                 const last_free_list_item_addr = @as(Address, @intCast(new_len - 1));
-                self.list.items[last_free_list_item_addr].left = InvalidAddr;
+                self.list.items[last_free_list_item_addr] = Node{ .free = InvalidAddr };
             } else {
                 self.free_list_tail = InvalidAddr;
             }
@@ -317,13 +316,14 @@ pub fn LinkedArrayList(comptime T: type) type {
             const fromNode = &self.list.items[from];
             const toNode = &self.list.items[to];
             toNode.* = fromNode.*;
-            if (toNode.left != InvalidAddr) {
-                assert(self.list.items[toNode.left].right == from);
-                self.list.items[toNode.left].right = to;
+            const used = &toNode.used;
+            if (used.left != InvalidAddr) {
+                assert(self.list.items[used.left].used.right == from);
+                self.list.items[used.left].used.right = to;
             }
-            if (toNode.right != InvalidAddr) {
-                assert(self.list.items[toNode.right].left == from);
-                self.list.items[toNode.right].left = to;
+            if (used.right != InvalidAddr) {
+                assert(self.list.items[used.right].used.left == from);
+                self.list.items[used.right].used.left = to;
             }
             if (self.head_addr == from) {
                 self.head_addr = to;
@@ -338,7 +338,7 @@ pub fn LinkedArrayList(comptime T: type) type {
         }
 
         pub fn head(self: *Self) T {
-            return self.list.items[self.head_addr].elem;
+            return self.list.items[self.head_addr].used.elem;
         }
 
         pub fn pop_tail(self: *Self) T {
@@ -346,7 +346,7 @@ pub fn LinkedArrayList(comptime T: type) type {
         }
 
         pub fn tail(self: *Self) T {
-            return self.list.items[self.tail_addr].elem;
+            return self.list.items[self.tail_addr].used.elem;
         }
 
         pub fn iterator(self: *Self) Iterator {
@@ -361,7 +361,7 @@ pub fn LinkedArrayList(comptime T: type) type {
             if (it.addr == InvalidAddr) {
                 return it;
             }
-            const next = self.list.items[it.addr].right;
+            const next = self.list.items[it.addr].used.right;
             _ = self.deleteAtAddr(it.addr);
             return Iterator{
                 .al = self,
@@ -370,11 +370,11 @@ pub fn LinkedArrayList(comptime T: type) type {
         }
 
         pub fn get(self: *Self, addr: Address) T {
-            return self.list.items[addr].elem;
+            return self.list.items[addr].used.elem;
         }
 
         pub fn getPtr(self: *Self, addr: Address) *T {
-            return &self.list.items[addr].elem;
+            return &self.list.items[addr].used.elem;
         }
 
         pub const Iterator = struct {
@@ -385,12 +385,12 @@ pub fn LinkedArrayList(comptime T: type) type {
                 if (self.addr == InvalidAddr) {
                     return null;
                 }
-                return &self.al.list.items[self.addr].elem;
+                return &self.al.list.items[self.addr].used.elem;
             }
 
             pub fn next(self: *Iterator) void {
                 if (self.addr != InvalidAddr) {
-                    self.addr = self.al.list.items[self.addr].right;
+                    self.addr = self.al.list.items[self.addr].used.right;
                 }
             }
         };
@@ -599,7 +599,7 @@ fn calculateListLengthFromTail(comptime T: type, start: Address, list: *LinkedAr
     var length: usize = 0;
     var addr = start;
     while (addr != InvalidAddr) {
-        const node = &list.list.items[addr];
+        const node = &list.list.items[addr].used;
         addr = node.left;
         length += 1;
     }
@@ -610,8 +610,18 @@ fn calculateListLengthFromHead(comptime T: type, start: Address, list: *LinkedAr
     var length: usize = 0;
     var addr = start;
     while (addr != InvalidAddr) {
-        const node = &list.list.items[addr];
+        const node = &list.list.items[addr].used;
         addr = node.right;
+        length += 1;
+    }
+    return length;
+}
+
+fn calculateFreeListLength(comptime T: type, start: Address, list: *LinkedArrayList(T)) usize {
+    var length: usize = 0;
+    var addr = start;
+    while (addr != InvalidAddr) {
+        addr = list.list.items[addr].free;
         length += 1;
     }
     return length;
@@ -620,7 +630,7 @@ fn calculateListLengthFromHead(comptime T: type, start: Address, list: *LinkedAr
 fn expectListInvariants(comptime T: type, list: *LinkedArrayList(T)) !void {
     try testing.expectEqual(list.length, calculateListLengthFromHead(T, list.head_addr, list));
     try testing.expectEqual(list.length, calculateListLengthFromTail(T, list.tail_addr, list));
-    try testing.expectEqual(list.free_list_size, calculateListLengthFromTail(T, list.free_list_tail, list));
+    try testing.expectEqual(list.free_list_size, calculateFreeListLength(T, list.free_list_tail, list));
     if (list.length == 0) {
         try testing.expectEqual(InvalidAddr, list.head_addr);
         try testing.expectEqual(InvalidAddr, list.tail_addr);
@@ -654,7 +664,7 @@ test "LinkedArrayList ensure list size and free list sizes are correct" {
 
     i = 0;
     while (i < total_size) : (i += 1) {
-        try std.testing.expectEqual(@as(usize, @intCast(i)), calculateListLengthFromTail(i32, la.free_list_tail, &la));
+        try std.testing.expectEqual(@as(usize, @intCast(i)), calculateFreeListLength(i32, la.free_list_tail, &la));
         try std.testing.expectEqual(total_size - @as(usize, @intCast(i)), calculateListLengthFromHead(i32, la.head_addr, &la));
         try std.testing.expectEqual(total_size - @as(usize, @intCast(i)), calculateListLengthFromTail(i32, la.tail_addr, &la));
         _ = la.pop_head();
@@ -662,7 +672,7 @@ test "LinkedArrayList ensure list size and free list sizes are correct" {
 
     i = 0;
     while (i < total_size) : (i += 1) {
-        try std.testing.expectEqual(total_size - @as(usize, @intCast(i)), calculateListLengthFromTail(i32, la.free_list_tail, &la));
+        try std.testing.expectEqual(total_size - @as(usize, @intCast(i)), calculateFreeListLength(i32, la.free_list_tail, &la));
         try std.testing.expectEqual(@as(usize, @intCast(i)), calculateListLengthFromHead(i32, la.head_addr, &la));
         try std.testing.expectEqual(@as(usize, @intCast(i)), calculateListLengthFromTail(i32, la.tail_addr, &la));
         _ = try la.push(i);
@@ -722,7 +732,7 @@ test "LinkedArrayList relocate, never free memory" {
     try std.testing.expectEqual(null, rcb.actFrom);
     try std.testing.expectEqual(null, rcb.actTo);
     try std.testing.expectEqual(current_size, la.len());
-    try std.testing.expectEqual(total_size - current_size, calculateListLengthFromTail(i32, la.free_list_tail, &la));
+    try std.testing.expectEqual(total_size - current_size, calculateFreeListLength(i32, la.free_list_tail, &la));
     current_size -= 1;
 
     // pop tail, no relocation should happen
@@ -731,7 +741,7 @@ test "LinkedArrayList relocate, never free memory" {
     try std.testing.expectEqual(null, rcb.actFrom);
     try std.testing.expectEqual(null, rcb.actTo);
     try std.testing.expectEqual(current_size, la.len());
-    try std.testing.expectEqual(total_size - current_size, calculateListLengthFromTail(i32, la.free_list_tail, &la));
+    try std.testing.expectEqual(total_size - current_size, calculateFreeListLength(i32, la.free_list_tail, &la));
     current_size -= 1;
 
     // pop head, the new head should be at position 1, and the last item should
@@ -741,7 +751,7 @@ test "LinkedArrayList relocate, never free memory" {
     try std.testing.expectEqual(126, rcb.actFrom);
     try std.testing.expectEqual(0, rcb.actTo);
     try std.testing.expectEqual(current_size, la.len());
-    try std.testing.expectEqual(total_size - current_size, calculateListLengthFromTail(i32, la.free_list_tail, &la));
+    try std.testing.expectEqual(total_size - current_size, calculateFreeListLength(i32, la.free_list_tail, &la));
     current_size -= 1;
 
     // remove elements in the middle of the list. this should always cause relocations.
@@ -755,7 +765,7 @@ test "LinkedArrayList relocate, never free memory" {
         try std.testing.expectEqual(addr, rcb.actTo.?);
         try std.testing.expectEqual(l - 1, rcb.actFrom.?);
         try std.testing.expectEqual(current_size, la.len());
-        try std.testing.expectEqual(total_size - current_size, calculateListLengthFromTail(i32, la.free_list_tail, &la));
+        try std.testing.expectEqual(total_size - current_size, calculateFreeListLength(i32, la.free_list_tail, &la));
         current_size -= 1;
     }
     // now we have the following list:
@@ -769,7 +779,7 @@ test "LinkedArrayList relocate, never free memory" {
     try std.testing.expectEqual(1, rcb.actFrom);
     try std.testing.expectEqual(0, rcb.actTo);
     try std.testing.expectEqual(1, la.len());
-    try std.testing.expectEqual(total_size - current_size, calculateListLengthFromTail(i32, la.free_list_tail, &la));
+    try std.testing.expectEqual(total_size - current_size, calculateFreeListLength(i32, la.free_list_tail, &la));
     // finally, remove the last element
     rcb.reset();
     removed = la.pop_tail();
@@ -778,11 +788,11 @@ test "LinkedArrayList relocate, never free memory" {
     try std.testing.expectEqual(null, rcb.actFrom);
     try std.testing.expectEqual(null, rcb.actTo);
     try std.testing.expectEqual(0, la.len());
-    try std.testing.expectEqual(total_size, calculateListLengthFromTail(i32, la.free_list_tail, &la));
+    try std.testing.expectEqual(total_size, calculateFreeListLength(i32, la.free_list_tail, &la));
 
     la.clear();
     try std.testing.expectEqual(0, la.len());
-    try std.testing.expectEqual(0, calculateListLengthFromTail(i32, la.free_list_tail, &la));
+    try std.testing.expectEqual(0, calculateFreeListLength(i32, la.free_list_tail, &la));
 }
 
 test "LinkedArrayList relocate, free memory every call to remove" {
@@ -808,7 +818,7 @@ test "LinkedArrayList relocate, free memory every call to remove" {
     try std.testing.expectEqual(null, rcb.actFrom);
     try std.testing.expectEqual(null, rcb.actTo);
     try std.testing.expectEqual(size, la.len());
-    try std.testing.expectEqual(0, calculateListLengthFromTail(i32, la.free_list_tail, &la));
+    try std.testing.expectEqual(0, calculateFreeListLength(i32, la.free_list_tail, &la));
     size -= 1;
 
     // pop tail, no relocation should happen
@@ -817,7 +827,7 @@ test "LinkedArrayList relocate, free memory every call to remove" {
     try std.testing.expectEqual(null, rcb.actFrom);
     try std.testing.expectEqual(null, rcb.actTo);
     try std.testing.expectEqual(size, la.len());
-    try std.testing.expectEqual(0, calculateListLengthFromTail(i32, la.free_list_tail, &la));
+    try std.testing.expectEqual(0, calculateFreeListLength(i32, la.free_list_tail, &la));
     size -= 1;
 
     // pop head, the new head should be at position 1, and the last item should
@@ -827,7 +837,7 @@ test "LinkedArrayList relocate, free memory every call to remove" {
     try std.testing.expectEqual(126, rcb.actFrom);
     try std.testing.expectEqual(0, rcb.actTo);
     try std.testing.expectEqual(size, la.len());
-    try std.testing.expectEqual(0, calculateListLengthFromTail(i32, la.free_list_tail, &la));
+    try std.testing.expectEqual(0, calculateFreeListLength(i32, la.free_list_tail, &la));
     size -= 1;
 
     // remove elements in the middle of the list. this should always cause relocations.
@@ -841,7 +851,7 @@ test "LinkedArrayList relocate, free memory every call to remove" {
         try std.testing.expectEqual(addr, rcb.actTo.?);
         try std.testing.expectEqual(l - 1, rcb.actFrom.?);
         try std.testing.expectEqual(size, la.len());
-        try std.testing.expectEqual(0, calculateListLengthFromTail(i32, la.free_list_tail, &la));
+        try std.testing.expectEqual(0, calculateFreeListLength(i32, la.free_list_tail, &la));
         size -= 1;
     }
     // now we have the following list:
@@ -855,7 +865,7 @@ test "LinkedArrayList relocate, free memory every call to remove" {
     try std.testing.expectEqual(1, rcb.actFrom);
     try std.testing.expectEqual(0, rcb.actTo);
     try std.testing.expectEqual(1, la.len());
-    try std.testing.expectEqual(0, calculateListLengthFromTail(i32, la.free_list_tail, &la));
+    try std.testing.expectEqual(0, calculateFreeListLength(i32, la.free_list_tail, &la));
     // finally, remove the last element
     rcb.reset();
     removed = la.pop_tail();
@@ -864,11 +874,11 @@ test "LinkedArrayList relocate, free memory every call to remove" {
     try std.testing.expectEqual(null, rcb.actFrom);
     try std.testing.expectEqual(null, rcb.actTo);
     try std.testing.expectEqual(0, la.len());
-    try std.testing.expectEqual(0, calculateListLengthFromTail(i32, la.free_list_tail, &la));
+    try std.testing.expectEqual(0, calculateFreeListLength(i32, la.free_list_tail, &la));
 
     la.clear();
     try std.testing.expectEqual(0, la.len());
-    try std.testing.expectEqual(0, calculateListLengthFromTail(i32, la.free_list_tail, &la));
+    try std.testing.expectEqual(0, calculateFreeListLength(i32, la.free_list_tail, &la));
 }
 
 const reallocHelper = struct {

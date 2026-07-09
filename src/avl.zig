@@ -81,65 +81,89 @@ pub fn TreeWithOptions(comptime K: type, comptime V: type, comptime Cmp: fn (a: 
             Value: *V,
         };
 
-        fn goLeft(loc: Location) Location {
+        fn locEq(self: *Self, lhs: Location, rhs: Location) bool {
+            return self.lc.eq(lhs, rhs);
+        }
+
+        fn data(self: *Self, loc: Location) *Location.NodeData {
+            return self.lc.data(loc);
+        }
+
+        fn child(self: *Self, loc: Location, comptime dir: direction) ?Location {
+            return self.lc.child(loc, dir);
+        }
+
+        fn setChild(self: *Self, loc: *Location, comptime dir: direction, child_loc: ?Location) void {
+            self.lc.setChild(loc, dir, child_loc);
+        }
+
+        fn parent(self: *Self, loc: Location) ?Location {
+            return self.lc.parent(loc);
+        }
+
+        fn setParent(self: *Self, loc: *Location, p: ?Location) void {
+            self.lc.setParent(loc, p);
+        }
+
+        fn goLeft(self: *Self, loc: Location) Location {
             var l = loc;
             while (true) {
-                const left = l.child(.left) orelse break;
+                const left = self.child(l, .left) orelse break;
                 l = left;
             }
             return l;
         }
 
-        fn goRight(loc: Location) Location {
+        fn goRight(self: *Self, loc: Location) Location {
             var r = loc;
             while (true) {
-                const right = r.child(.right) orelse break;
+                const right = self.child(r, .right) orelse break;
                 r = right;
             }
             return r;
         }
 
-        fn nextInOrderLocation(loc: Location) ?Location {
+        fn nextInOrderLocation(self: *Self, loc: Location) ?Location {
             var l = loc;
-            if (l.child(.right)) |r| {
-                return goLeft(r);
+            if (self.child(l, .right)) |r| {
+                return self.goLeft(r);
             }
             while (true) {
-                const parent = l.parent() orelse return null;
-                const dir = childDir(parent, l);
+                const p = self.parent(l) orelse return null;
+                const dir = self.childDir(p, l);
                 if (dir == .left or dir == .center) {
-                    return parent;
+                    return p;
                 }
-                l = parent;
+                l = p;
             }
         }
 
-        fn prevInOrderLocation(loc: Location) ?Location {
+        fn prevInOrderLocation(self: *Self, loc: Location) ?Location {
             var l = loc;
-            if (l.child(.left)) |left| {
-                return goRight(left);
+            if (self.child(l, .left)) |left| {
+                return self.goRight(left);
             }
             while (true) {
-                const parent = l.parent() orelse return null;
-                const dir = childDir(parent, l);
+                const p = self.parent(l) orelse return null;
+                const dir = self.childDir(p, l);
                 if (dir == .right or dir == .center) {
-                    return parent;
+                    return p;
                 }
-                l = parent;
+                l = p;
             }
         }
 
-        fn goLeftRight(loc: Location) ?Location {
+        fn goLeftRight(self: *Self, loc: Location) ?Location {
             var l = loc;
             while (true) {
-                l = goLeft(l);
-                var right = l.child(.right) orelse return l;
+                l = self.goLeft(l);
+                var right = self.child(l, .right) orelse return l;
                 while (true) {
-                    if (right.child(.left)) |right_left| {
+                    if (self.child(right, .left)) |right_left| {
                         l = right_left;
                         break;
                     }
-                    if (right.child(.right)) |right_right| {
+                    if (self.child(right, .right)) |right_right| {
                         right = right_right;
                     } else {
                         return right;
@@ -149,119 +173,119 @@ pub fn TreeWithOptions(comptime K: type, comptime V: type, comptime Cmp: fn (a: 
             return l;
         }
 
-        fn nextPostOrderLocation(loc: Location) ?Location {
-            var l = loc;
-            var parent = l.parent() orelse return null;
-            const dir = childDir(parent, l);
+        fn nextPostOrderLocation(self: *Self, loc: Location) ?Location {
+            const l = loc;
+            const p = self.parent(l) orelse return null;
+            const dir = self.childDir(p, l);
             switch (dir) {
                 .left => {
-                    const right = parent.child(.right) orelse return parent;
-                    return goLeftRight(right);
+                    const right = self.child(p, .right) orelse return p;
+                    return self.goLeftRight(right);
                 },
-                .right => return parent,
+                .right => return p,
                 else => unreachable,
             }
         }
 
-        fn advance(loc: Location, count: isize) Location {
+        fn advance(self: *Self, loc: Location, count: isize) Location {
             var res = loc;
             var c = count;
             while (c > 0) {
-                res = nextInOrderLocation(res) orelse return res;
+                res = self.nextInOrderLocation(res) orelse return res;
                 c -= 1;
             }
             while (c < 0) {
-                res = prevInOrderLocation(res) orelse return res;
+                res = self.prevInOrderLocation(res) orelse return res;
                 c += 1;
             }
             return res;
         }
 
-        fn reparent(parent: ?Location, dir: direction, child: ?Location) void {
-            if (parent) |p| {
-                setChildAt(p, dir, child);
+        fn reparent(self: *Self, p: ?Location, dir: direction, child_loc: ?Location) void {
+            if (p) |parent_loc| {
+                self.setChildAt(parent_loc, dir, child_loc);
             }
-            if (child) |c| {
+            if (child_loc) |c| {
                 var ch = c;
-                ch.setParent(parent);
+                self.setParent(&ch, p);
             }
         }
 
-        fn childAt(loc: Location, dir: direction) ?Location {
+        fn childAt(self: *Self, loc: Location, dir: direction) ?Location {
             switch (dir) {
-                .left => return loc.child(.left),
-                .right => return loc.child(.right),
+                .left => return self.child(loc, .left),
+                .right => return self.child(loc, .right),
                 else => unreachable,
             }
         }
 
-        fn setChildAt(parent: Location, dir: direction, child: ?Location) void {
-            var p = parent;
+        fn setChildAt(self: *Self, parent_loc: Location, dir: direction, child_loc: ?Location) void {
+            var p = parent_loc;
             switch (dir) {
-                .left => p.setChild(.left, child),
-                .right => p.setChild(.right, child),
+                .left => self.setChild(&p, .left, child_loc),
+                .right => self.setChild(&p, .right, child_loc),
                 else => unreachable,
             }
         }
 
-        fn childDir(loc: Location, other: Location) direction {
-            if (loc.child(.left)) |left| {
-                if (left.eq(other)) {
+        fn childDir(self: *Self, loc: Location, other: Location) direction {
+            if (self.child(loc, .left)) |left| {
+                if (self.locEq(left, other)) {
                     return .left;
                 }
             }
-            if (loc.child(.right)) |right| {
-                if (right.eq(other)) {
+            if (self.child(loc, .right)) |right| {
+                if (self.locEq(right, other)) {
                     return .right;
                 }
             }
             return .center;
         }
 
-        fn recalcCounts(loc: Location) void {
+        fn recalcCounts(self: *Self, loc: Location) void {
             var count: u32 = 0;
-            if (loc.child(.left)) |left| {
-                count += 1 + left.data().tags.childrenCount;
+            if (self.child(loc, .left)) |left| {
+                count += 1 + self.data(left).tags.childrenCount;
             }
-            if (loc.child(.right)) |right| {
-                count += 1 + right.data().tags.childrenCount;
+            if (self.child(loc, .right)) |right| {
+                count += 1 + self.data(right).tags.childrenCount;
             }
-            loc.data().tags.childrenCount = count;
+            self.data(loc).tags.childrenCount = count;
         }
 
-        fn updateCounts(loc: Location) void {
+        fn updateCounts(self: *Self, loc: Location) void {
             var mutLoc: ?Location = loc;
             while (mutLoc) |*l| {
-                recalcCounts(l.*);
-                mutLoc = l.parent();
+                self.recalcCounts(l.*);
+                mutLoc = self.parent(l.*);
             }
         }
 
-        fn leftCount(loc: Location) usize {
-            if (loc.child(.left)) |left| {
-                return 1 + left.data().tags.childrenCount;
+        fn leftCount(self: *Self, loc: Location) usize {
+            if (self.child(loc, .left)) |left| {
+                return 1 + self.data(left).tags.childrenCount;
             }
             return 0;
         }
 
-        fn recalcHeight(loc: Location) bool {
+        fn recalcHeight(self: *Self, loc: Location) bool {
             var h: u8 = 0;
-            if (loc.child(.left)) |l| {
-                h = 1 + l.data().h;
+            if (self.child(loc, .left)) |l| {
+                h = 1 + self.data(l).h;
             }
-            if (loc.child(.right)) |r| {
-                h = @max(h, 1 + r.data().h);
+            if (self.child(loc, .right)) |r| {
+                h = @max(h, 1 + self.data(r).h);
             }
-            return loc.data().setHeight(h);
+            return self.data(loc).setHeight(h);
         }
 
-        fn balance(loc: Location) i8 {
+        fn balance(self: *Self, loc: Location) i8 {
             var b: i8 = 0;
-            if (loc.child(.right)) |right| {
-                b += 1 + @as(i8, @intCast(right.data().h));
+            if (self.child(loc, .right)) |right| {
+                b += 1 + @as(i8, @intCast(self.data(right).h));
             }
-            if (loc.child(.left)) |left| {
-                b -= 1 + @as(i8, @intCast(left.data().h));
+            if (self.child(loc, .left)) |left| {
+                b -= 1 + @as(i8, @intCast(self.data(left).h));
             }
             return b;
         }
@@ -280,21 +304,22 @@ pub fn TreeWithOptions(comptime K: type, comptime V: type, comptime Cmp: fn (a: 
 
             pub fn next(self: *Iterator) void {
                 if (self.loc) |l| {
-                    self.loc = nextInOrderLocation(l);
+                    self.loc = self.tree.nextInOrderLocation(l);
                 }
             }
 
             pub fn prev(self: *Iterator) void {
                 if (self.loc) |l| {
-                    self.loc = prevInOrderLocation(l);
+                    self.loc = self.tree.prevInOrderLocation(l);
                 }
             }
 
             pub fn value(self: *const Iterator) ?Entry {
                 if (self.loc) |l| {
+                    const data_ptr = self.tree.data(l);
                     return Entry{
-                        .Key = l.data().k,
-                        .Value = &l.data().v,
+                        .Key = data_ptr.k,
+                        .Value = &data_ptr.v,
                     };
                 }
                 return null;
@@ -335,10 +360,10 @@ pub fn TreeWithOptions(comptime K: type, comptime V: type, comptime Cmp: fn (a: 
                 return;
             }
             const min = self.min orelse return;
-            var loc = goLeftRight(min);
+            var loc = self.goLeftRight(min);
             while (true) {
                 const l = loc orelse break;
-                const next = nextPostOrderLocation(l);
+                const next = self.nextPostOrderLocation(l);
                 self.lc.destroy(l);
                 loc = next;
             }
@@ -350,8 +375,8 @@ pub fn TreeWithOptions(comptime K: type, comptime V: type, comptime Cmp: fn (a: 
         }
 
         fn createNewNode(self: *Self, k: ?K, v: ?V) !Location {
-            var new_loc = try self.lc.create();
-            const data_ptr = new_loc.data();
+            const new_loc = try self.lc.create();
+            const data_ptr = self.data(new_loc);
             data_ptr.*.tags = .{};
             if (k) |kVal| {
                 data_ptr.*.k = kVal;
@@ -380,16 +405,16 @@ pub fn TreeWithOptions(comptime K: type, comptime V: type, comptime Cmp: fn (a: 
                 if (res.dir == .center) {
                     return InsertResult{
                         .inserted = false,
-                        .v = &l.data().v,
+                        .v = &self.data(l).v,
                     };
                 }
             }
-            var new_loc = try self.createNewNode(k, null);
-            ctor(&new_loc.data().*.v, args);
+            const new_loc = try self.createNewNode(k, null);
+            ctor(&self.data(new_loc).v, args);
             self.insertNew(res, new_loc);
             return InsertResult{
                 .inserted = true,
-                .v = &new_loc.data().v,
+                .v = &self.data(new_loc).v,
             };
         }
 
@@ -411,19 +436,19 @@ pub fn TreeWithOptions(comptime K: type, comptime V: type, comptime Cmp: fn (a: 
             if (res.loc) |l| {
                 if (res.dir == .center) {
                     if (updateExisting) {
-                        l.data().v = v;
+                        self.data(l).v = v;
                     }
                     return InsertResult{
                         .inserted = false,
-                        .v = &l.data().v,
+                        .v = &self.data(l).v,
                     };
                 }
             }
-            var new_loc = try self.createNewNode(k, v);
+            const new_loc = try self.createNewNode(k, v);
             self.insertNew(res, new_loc);
             return InsertResult{
                 .inserted = true,
-                .v = &new_loc.data().v,
+                .v = &self.data(new_loc).v,
             };
         }
 
@@ -431,21 +456,21 @@ pub fn TreeWithOptions(comptime K: type, comptime V: type, comptime Cmp: fn (a: 
             self.length += 1;
             switch (where.dir) {
                 .left, .right => {
-                    var l = where.loc orelse unreachable;
-                    reparent(l, where.dir, new_loc);
-                    if (where.dir == .left and l.eq(self.min.?)) {
+                    const l = where.loc orelse unreachable;
+                    self.reparent(l, where.dir, new_loc);
+                    if (where.dir == .left and self.locEq(l, self.min.?)) {
                         self.min = new_loc;
-                    } else if (where.dir == .right and l.eq(self.max.?)) {
+                    } else if (where.dir == .right and self.locEq(l, self.max.?)) {
                         self.max = new_loc;
                     }
-                    if (recalcHeight(l)) {
+                    if (self.recalcHeight(l)) {
                         if (options.countChildren) {
-                            recalcCounts(l);
+                            self.recalcCounts(l);
                         }
-                        self.checkBalance(l.parent(), false);
+                        self.checkBalance(self.parent(l), false);
                     } else {
                         if (options.countChildren) {
-                            updateCounts(l);
+                            self.updateCounts(l);
                         }
                     }
                 },
@@ -470,53 +495,53 @@ pub fn TreeWithOptions(comptime K: type, comptime V: type, comptime Cmp: fn (a: 
             if (res.dir != .center) {
                 return null;
             }
-            var l = res.loc orelse return null;
-            const v = l.data().v;
+            const l = res.loc orelse return null;
+            const v = self.data(l).v;
             self.deleteLocation(l);
             return v;
         }
 
         fn deleteAndReplace(self: *Self, loc: Location) void {
-            const replacement = findReplacement(loc);
+            const replacement = self.findReplacement(loc);
             if (self.min) |min| {
-                if (loc.eq(min)) {
-                    self.min = nextInOrderLocation(loc);
+                if (self.locEq(loc, min)) {
+                    self.min = self.nextInOrderLocation(loc);
                 }
             }
             if (self.max) |max| {
-                if (loc.eq(max)) {
-                    self.max = prevInOrderLocation(loc);
+                if (self.locEq(loc, max)) {
+                    self.max = self.prevInOrderLocation(loc);
                 }
             }
-            const parent = loc.parent();
+            const parent_loc = self.parent(loc);
             self.length -= 1;
             if (replacement) |rep| {
-                var replacement_parent = rep.parent().?;
-                var replacement_dir = childDir(replacement_parent, rep);
+                const replacement_parent = self.parent(rep).?;
+                const replacement_dir = self.childDir(replacement_parent, rep);
                 const inverted = replacement_dir.invert();
-                if (replacement_parent.eq(loc)) {
-                    if (parent) |p| {
-                        reparent(p, childDir(p, loc), rep);
+                if (self.locEq(replacement_parent, loc)) {
+                    if (parent_loc) |p| {
+                        self.reparent(p, self.childDir(p, loc), rep);
                     } else {
                         self.setRoot(rep);
                     }
-                    reparent(rep, inverted, childAt(loc, inverted));
+                    self.reparent(rep, inverted, self.childAt(loc, inverted));
                     self.checkBalance(rep, true);
                     return;
                 }
-                const replacement_child = childAt(rep, inverted);
-                reparent(replacement_parent, replacement_dir, replacement_child);
-                if (parent) |p| {
-                    reparent(p, childDir(p, loc), rep);
+                const replacement_child = self.childAt(rep, inverted);
+                self.reparent(replacement_parent, replacement_dir, replacement_child);
+                if (parent_loc) |p| {
+                    self.reparent(p, self.childDir(p, loc), rep);
                 } else {
                     self.setRoot(rep);
                 }
-                reparent(rep, .left, loc.child(.left));
-                reparent(rep, .right, loc.child(.right));
+                self.reparent(rep, .left, self.child(loc, .left));
+                self.reparent(rep, .right, self.child(loc, .right));
                 self.checkBalance(replacement_parent, true);
             } else {
-                if (parent) |p| {
-                    reparent(p, childDir(p, loc), replacement);
+                if (parent_loc) |p| {
+                    self.reparent(p, self.childDir(p, loc), replacement);
                     self.checkBalance(p, false);
                 } else {
                     self.setRoot(null);
@@ -524,17 +549,17 @@ pub fn TreeWithOptions(comptime K: type, comptime V: type, comptime Cmp: fn (a: 
             }
         }
 
-        fn findReplacement(loc: Location) ?Location {
-            const left = loc.child(.left);
-            const right = loc.child(.right);
+        fn findReplacement(self: *Self, loc: Location) ?Location {
+            const left = self.child(loc, .left);
+            const right = self.child(loc, .right);
             if (left) |l| {
                 if (right) |r| {
                     // Russell A. Brown, Optimized Deletion From an AVL Tree.
                     // https://arxiv.org/pdf/2406.05162v5
-                    if (balance(loc) <= 0) {
-                        return goRight(l);
+                    if (self.balance(loc) <= 0) {
+                        return self.goRight(l);
                     }
-                    return goLeft(r);
+                    return self.goLeft(r);
                 }
                 return left;
             }
@@ -545,9 +570,10 @@ pub fn TreeWithOptions(comptime K: type, comptime V: type, comptime Cmp: fn (a: 
         // Time complexity: O(1).
         pub fn getMin(self: *Self) ?Entry {
             if (self.min) |min| {
+                const data_ptr = self.data(min);
                 return Entry{
-                    .Key = min.data().k,
-                    .Value = &min.data().v,
+                    .Key = data_ptr.k,
+                    .Value = &data_ptr.v,
                 };
             }
             return null;
@@ -557,9 +583,10 @@ pub fn TreeWithOptions(comptime K: type, comptime V: type, comptime Cmp: fn (a: 
         // Time complexity: O(1).
         pub fn getMax(self: *Self) ?Entry {
             if (self.max) |max| {
+                const data_ptr = self.data(max);
                 return Entry{
-                    .Key = max.data().k,
-                    .Value = &max.data().v,
+                    .Key = data_ptr.k,
+                    .Value = &data_ptr.v,
                 };
             }
             return null;
@@ -588,7 +615,7 @@ pub fn TreeWithOptions(comptime K: type, comptime V: type, comptime Cmp: fn (a: 
         pub fn deleteIterator(self: *Self, it: Iterator) Iterator {
             std.debug.assert(it.tree == self);
             const loc = it.loc orelse return it;
-            const next = nextInOrderLocation(loc);
+            const next = self.nextInOrderLocation(loc);
             self.deleteLocation(loc);
             return Iterator{
                 .loc = next,
@@ -602,7 +629,7 @@ pub fn TreeWithOptions(comptime K: type, comptime V: type, comptime Cmp: fn (a: 
             const res = self.locate(k);
             if (res.dir == .center) {
                 if (res.loc) |loc| {
-                    return &loc.data().v;
+                    return &self.data(loc).v;
                 }
             }
             return null;
@@ -614,10 +641,11 @@ pub fn TreeWithOptions(comptime K: type, comptime V: type, comptime Cmp: fn (a: 
         //  O(logn) - if children node counts are enabled.
         //  O(n) - otherwise.
         pub fn at(self: *Self, pos: usize) Entry {
-            var loc = self.locateAt(pos);
+            const loc = self.locateAt(pos);
+            const data_ptr = self.data(loc);
             return Entry{
-                .Key = loc.data().k,
-                .Value = &loc.data().v,
+                .Key = data_ptr.k,
+                .Value = &data_ptr.v,
             };
         }
 
@@ -646,10 +674,11 @@ pub fn TreeWithOptions(comptime K: type, comptime V: type, comptime Cmp: fn (a: 
         //  O(logn) - if children node counts are enabled.
         //  O(n) - otherwise.
         pub fn deleteAt(self: *Self, pos: usize) KV {
-            var loc = self.locateAt(pos);
+            const loc = self.locateAt(pos);
+            const data_ptr = self.data(loc);
             const kv = KV{
-                .Key = loc.data().k,
-                .Value = loc.data().v,
+                .Key = data_ptr.k,
+                .Value = data_ptr.v,
             };
             self.deleteLocation(loc);
             return kv;
@@ -658,13 +687,13 @@ pub fn TreeWithOptions(comptime K: type, comptime V: type, comptime Cmp: fn (a: 
         fn setRoot(self: *Self, loc: ?Location) void {
             self.root = loc;
             if (self.root) |*root| {
-                root.setParent(null);
+                self.setParent(root, null);
             }
         }
 
-        fn treeRotated(self: *Self, parent: ?Location, oldRoot: Location, newRoot: Location) void {
-            if (parent) |p| {
-                reparent(p, childDir(p, oldRoot), newRoot);
+        fn treeRotated(self: *Self, parent_loc: ?Location, oldRoot: Location, newRoot: Location) void {
+            if (parent_loc) |p| {
+                self.reparent(p, self.childDir(p, oldRoot), newRoot);
             } else {
                 self.setRoot(newRoot);
             }
@@ -674,138 +703,138 @@ pub fn TreeWithOptions(comptime K: type, comptime V: type, comptime Cmp: fn (a: 
             var mutLoc = loc;
             while (mutLoc) |*mlPtr| {
                 const l = mlPtr.*;
-                const parent = l.parent();
-                switch (balance(l)) {
+                const parent_loc = self.parent(l);
+                switch (self.balance(l)) {
                     -2 => {
                         const subRoot = blk: {
-                            switch (balance(l.child(.left).?)) {
+                            switch (self.balance(self.child(l, .left).?)) {
                                 -1, 0 => {
-                                    break :blk rr(l);
+                                    break :blk self.rr(l);
                                 },
                                 1 => {
-                                    break :blk lr(l);
+                                    break :blk self.lr(l);
                                 },
                                 else => unreachable,
                             }
                         };
-                        self.treeRotated(parent, l, subRoot);
+                        self.treeRotated(parent_loc, l, subRoot);
                     },
                     2 => {
                         const subRoot = blk: {
-                            switch (balance(l.child(.right).?)) {
+                            switch (self.balance(self.child(l, .right).?)) {
                                 -1 => {
-                                    break :blk rl(l);
+                                    break :blk self.rl(l);
                                 },
                                 0, 1 => {
-                                    break :blk ll(l);
+                                    break :blk self.ll(l);
                                 },
                                 else => unreachable,
                             }
                         };
-                        self.treeRotated(parent, l, subRoot);
+                        self.treeRotated(parent_loc, l, subRoot);
                     },
                     else => {
-                        if (!recalcHeight(l) and !all_way_up) {
+                        if (!self.recalcHeight(l) and !all_way_up) {
                             if (options.countChildren) {
-                                updateCounts(l);
+                                self.updateCounts(l);
                             }
                             return;
                         }
                         if (options.countChildren) {
-                            recalcCounts(l);
+                            self.recalcCounts(l);
                         }
                     },
                 }
-                mutLoc = parent;
+                mutLoc = parent_loc;
             }
         }
 
-        fn rr(loc: Location) Location {
-            var l = loc;
-            var left = l.child(.left).?;
-            const left_right = left.child(.right);
+        fn rr(self: *Self, loc: Location) Location {
+            const l = loc;
+            const left = self.child(l, .left).?;
+            const left_right = self.child(left, .right);
 
-            reparent(l, .left, left_right);
-            reparent(left, .right, l);
+            self.reparent(l, .left, left_right);
+            self.reparent(left, .right, l);
 
-            _ = recalcHeight(l);
-            _ = recalcHeight(left);
+            _ = self.recalcHeight(l);
+            _ = self.recalcHeight(left);
 
             if (options.countChildren) {
-                recalcCounts(l);
-                recalcCounts(left);
+                self.recalcCounts(l);
+                self.recalcCounts(left);
             }
 
             return left;
         }
 
-        fn lr(loc: Location) Location {
-            var l = loc;
-            var left = l.child(.left).?;
-            var left_right = left.child(.right).?;
-            const left_right_right = left_right.child(.right);
-            const left_right_left = left_right.child(.left);
+        fn lr(self: *Self, loc: Location) Location {
+            const l = loc;
+            const left = self.child(l, .left).?;
+            const left_right = self.child(left, .right).?;
+            const left_right_right = self.child(left_right, .right);
+            const left_right_left = self.child(left_right, .left);
 
-            reparent(left_right, .right, l);
-            reparent(left_right, .left, left);
+            self.reparent(left_right, .right, l);
+            self.reparent(left_right, .left, left);
 
-            reparent(l, .left, left_right_right);
-            reparent(left, .right, left_right_left);
+            self.reparent(l, .left, left_right_right);
+            self.reparent(left, .right, left_right_left);
 
-            _ = recalcHeight(l);
-            _ = recalcHeight(left);
-            _ = recalcHeight(left_right);
+            _ = self.recalcHeight(l);
+            _ = self.recalcHeight(left);
+            _ = self.recalcHeight(left_right);
 
             if (options.countChildren) {
-                recalcCounts(l);
-                recalcCounts(left);
-                recalcCounts(left_right);
+                self.recalcCounts(l);
+                self.recalcCounts(left);
+                self.recalcCounts(left_right);
             }
 
             return left_right;
         }
 
-        fn rl(loc: Location) Location {
-            var l = loc;
-            var right = l.child(.right).?;
-            var right_left = right.child(.left).?;
+        fn rl(self: *Self, loc: Location) Location {
+            const l = loc;
+            const right = self.child(l, .right).?;
+            const right_left = self.child(right, .left).?;
 
-            const right_left_left = right_left.child(.left);
-            const right_left_right = right_left.child(.right);
+            const right_left_left = self.child(right_left, .left);
+            const right_left_right = self.child(right_left, .right);
 
-            reparent(right_left, .left, l);
-            reparent(right_left, .right, right);
+            self.reparent(right_left, .left, l);
+            self.reparent(right_left, .right, right);
 
-            reparent(l, .right, right_left_left);
-            reparent(right, .left, right_left_right);
+            self.reparent(l, .right, right_left_left);
+            self.reparent(right, .left, right_left_right);
 
-            _ = recalcHeight(l);
-            _ = recalcHeight(right);
-            _ = recalcHeight(right_left);
+            _ = self.recalcHeight(l);
+            _ = self.recalcHeight(right);
+            _ = self.recalcHeight(right_left);
 
             if (options.countChildren) {
-                recalcCounts(l);
-                recalcCounts(right);
-                recalcCounts(right_left);
+                self.recalcCounts(l);
+                self.recalcCounts(right);
+                self.recalcCounts(right_left);
             }
 
             return right_left;
         }
 
-        fn ll(loc: Location) Location {
-            var l = loc;
-            var right = l.child(.right).?;
-            const right_left = right.child(.left);
+        fn ll(self: *Self, loc: Location) Location {
+            const l = loc;
+            const right = self.child(l, .right).?;
+            const right_left = self.child(right, .left);
 
-            reparent(l, .right, right_left);
-            reparent(right, .left, l);
+            self.reparent(l, .right, right_left);
+            self.reparent(right, .left, l);
 
-            _ = recalcHeight(l);
-            _ = recalcHeight(right);
+            _ = self.recalcHeight(l);
+            _ = self.recalcHeight(right);
 
             if (options.countChildren) {
-                recalcCounts(l);
-                recalcCounts(right);
+                self.recalcCounts(l);
+                self.recalcCounts(right);
             }
 
             return right;
@@ -817,11 +846,11 @@ pub fn TreeWithOptions(comptime K: type, comptime V: type, comptime Cmp: fn (a: 
                 .dir = .center,
             };
             while (true) {
-                var l = result.loc orelse break;
+                const l = result.loc orelse break;
                 var next: ?Location = null;
-                switch (Comparer(k, l.data().k)) {
+                switch (Comparer(k, self.data(l).k)) {
                     .lt => {
-                        next = l.child(.left);
+                        next = self.child(l, .left);
                         result.dir = .left;
                     },
                     .eq => {
@@ -829,7 +858,7 @@ pub fn TreeWithOptions(comptime K: type, comptime V: type, comptime Cmp: fn (a: 
                         return result;
                     },
                     .gt => {
-                        next = l.child(.right);
+                        next = self.child(l, .right);
                         result.dir = .right;
                     },
                 }
@@ -852,22 +881,22 @@ pub fn TreeWithOptions(comptime K: type, comptime V: type, comptime Cmp: fn (a: 
             }
             if (!options.countChildren or self.shouldLocateAtLinearly(pos)) {
                 if (pos < self.length / 2) {
-                    return advance(self.min.?, @as(isize, @intCast(pos)));
+                    return self.advance(self.min.?, @as(isize, @intCast(pos)));
                 }
-                return advance(self.max.?, -@as(isize, @intCast(self.length - pos - 1)));
+                return self.advance(self.max.?, -@as(isize, @intCast(self.length - pos - 1)));
             }
             var loc = self.root.?;
             var p = pos;
             while (true) {
-                const left_count = leftCount(loc);
+                const left_count = self.leftCount(loc);
                 if (p == left_count) {
                     return loc;
                 }
                 if (p < left_count) {
-                    loc = loc.child(.left).?;
+                    loc = self.child(loc, .left).?;
                 } else {
                     p -= (left_count + 1);
-                    loc = loc.child(.right).?;
+                    loc = self.child(loc, .right).?;
                 }
             }
         }
@@ -925,10 +954,7 @@ test "tree getOrEmplace" {
         const ir = try t.getOrEmplace(i, ctor, i);
         try std.testing.expect(ir.inserted);
         try std.testing.expectEqual(i, ir.v.*);
-        try checkHeightAndBalance(
-            TreeType,
-            t.root,
-        );
+        try checkHeightAndBalance(&t);
         i += 1;
     }
 
@@ -971,10 +997,7 @@ test "tree insert" {
         try std.testing.expectEqual(i, max.?.Key);
         try std.testing.expectEqual(i, max.?.Value.*);
 
-        try checkHeightAndBalance(
-            TreeType,
-            t.root,
-        );
+        try checkHeightAndBalance(&t);
 
         i += 1;
     }
@@ -992,10 +1015,7 @@ test "tree insert" {
         const ir = try t.insert(i, i * 2);
         try std.testing.expect(!ir.inserted);
         try std.testing.expectEqual(i * 2, ir.v.*);
-        try checkHeightAndBalance(
-            TreeType,
-            t.root,
-        );
+        try checkHeightAndBalance(&t);
         i -= 1;
     }
 
@@ -1019,7 +1039,7 @@ test "tree delete" {
     try std.testing.expect(ir.inserted);
     var exp: i64 = 0;
     try std.testing.expectEqual(exp, t.delete(0).?);
-    try checkHeightAndBalance(TreeType, t.root);
+    try checkHeightAndBalance(&t);
 
     ir = try t.insert(0, 0);
     try std.testing.expect(ir.inserted);
@@ -1027,7 +1047,7 @@ test "tree delete" {
     try std.testing.expect(ir.inserted);
     exp_len = 2;
     try std.testing.expectEqual(exp_len, t.len());
-    try checkHeightAndBalance(TreeType, t.root);
+    try checkHeightAndBalance(&t);
     exp = 0;
     try std.testing.expectEqual(exp, t.delete(0).?);
     exp = -1;
@@ -1041,13 +1061,13 @@ test "tree delete" {
     try std.testing.expect(ir.inserted);
     exp_len = 2;
     try std.testing.expectEqual(exp_len, t.len());
-    try checkHeightAndBalance(TreeType, t.root);
+    try checkHeightAndBalance(&t);
     exp = 1;
     try std.testing.expectEqual(exp, t.delete(1).?);
     exp_len = 1;
     try std.testing.expectEqual(exp_len, t.len());
     try std.testing.expectEqual(@as(?i64, null), t.delete(-1));
-    try checkHeightAndBalance(TreeType, t.root);
+    try checkHeightAndBalance(&t);
     exp = 0;
     try std.testing.expectEqual(exp, t.delete(0).?);
     exp_len = 0;
@@ -1061,10 +1081,10 @@ test "tree delete" {
     try std.testing.expectEqual(exp, t.delete(0).?);
     exp_len = 1;
     try std.testing.expectEqual(exp_len, t.len());
-    try checkHeightAndBalance(TreeType, t.root);
+    try checkHeightAndBalance(&t);
     exp = 1;
     try std.testing.expectEqual(exp, t.delete(1).?);
-    try checkHeightAndBalance(TreeType, t.root);
+    try checkHeightAndBalance(&t);
     exp_len = 0;
     try std.testing.expectEqual(exp_len, t.len());
 
@@ -1078,7 +1098,7 @@ test "tree delete" {
     i = 128;
     while (i >= 0) {
         try std.testing.expectEqual(i, t.delete(i).?);
-        try checkHeightAndBalance(TreeType, t.root);
+        try checkHeightAndBalance(&t);
         i -= 1;
     }
 }
@@ -1332,12 +1352,12 @@ fn testTreeRandom(comptime options: Options) !void {
             const ir = try t.insert(val, val);
             try std.testing.expect(ir.inserted);
             try std.testing.expectEqual(val, ir.v.*);
-            try checkHeightAndBalance(TreeType, t.root);
+            try checkHeightAndBalance(&t);
         }
         r.random().shuffle(i64, arr);
         for (arr) |val| {
             try std.testing.expectEqual(val, t.delete(val).?);
-            try checkHeightAndBalance(TreeType, t.root);
+            try checkHeightAndBalance(&t);
         }
         try std.testing.expectEqual(exp_len, t.len());
         i += 1;
@@ -1388,6 +1408,30 @@ fn TestLocationCache(comptime underlying: type) type {
         pub fn fastDeinitAllowed(self: *Self) bool {
             return self.u.fastDeinitAllowed();
         }
+
+        pub fn eq(self: *Self, lhs: Location, rhs: Location) bool {
+            return self.u.eq(lhs, rhs);
+        }
+
+        pub fn data(self: *Self, loc: Location) *Location.NodeData {
+            return self.u.data(loc);
+        }
+
+        pub fn child(self: *Self, loc: Location, comptime dir: direction) ?Location {
+            return self.u.child(loc, dir);
+        }
+
+        pub fn setChild(self: *Self, loc: *Location, comptime dir: direction, child_loc: ?Location) void {
+            self.u.setChild(loc, dir, child_loc);
+        }
+
+        pub fn parent(self: *Self, loc: Location) ?Location {
+            return self.u.parent(loc);
+        }
+
+        pub fn setParent(self: *Self, loc: *Location, p: ?Location) void {
+            self.u.setParent(loc, p);
+        }
     };
 }
 
@@ -1400,7 +1444,7 @@ fn testFastDeinit(io: InitOptions, a: std.mem.Allocator, comptime nct: NodeCache
     defer t.deinit();
     t.lc.destroyHook = struct {
         fn doPanic(_: TreeType.Cache.Location) void {
-            @panic("message: []const u8");
+            @panic("should not happen");
         }
     }.doPanic;
     _ = try t.insert(0, 0);
@@ -1426,8 +1470,8 @@ test "fixed buffer allocator: auto fast deinit" {
     try testFastDeinit(.{ .allowFastDeinit = .auto }, fb.allocator(), .PointerBased);
 }
 
-fn checkHeightAndBalance(comptime T: type, loc: ?T.Location) !void {
-    _ = try recalcHeightAndBalance(T, loc);
+fn checkHeightAndBalance(tree: anytype) !void {
+    _ = try recalcHeightAndBalance(@TypeOf(tree.*), tree, tree.root);
 }
 
 const recalcResult = struct {
@@ -1444,21 +1488,21 @@ const recalcResult = struct {
     }
 };
 
-fn recalcHeightAndBalance(comptime T: type, loc: ?T.Location) !recalcResult {
+fn recalcHeightAndBalance(comptime T: type, tree: *T, loc: ?T.Location) !recalcResult {
     var result = recalcResult.init();
-    var l = loc orelse return result;
-    if (l.child(.left) != null) {
-        const lRes = try recalcHeightAndBalance(T, l.child(.left));
+    const l = loc orelse return result;
+    if (tree.child(l, .left) != null) {
+        const lRes = try recalcHeightAndBalance(T, tree, tree.child(l, .left));
         result.height = 1 + lRes.height;
         result.l_count = lRes.l_count + lRes.r_count + 1;
     }
-    if (l.child(.right) != null) {
-        const rRes = try recalcHeightAndBalance(T, l.child(.right));
+    if (tree.child(l, .right) != null) {
+        const rRes = try recalcHeightAndBalance(T, tree, tree.child(l, .right));
         result.height = @max(result.height, 1 + rRes.height);
         result.r_count = rRes.r_count + rRes.l_count + 1;
     }
-    try std.testing.expectEqual(result.height, l.data().h);
-    if (T.balance(l) < -1 or T.balance(l) > 1) {
+    try std.testing.expectEqual(result.height, tree.data(l).h);
+    if (tree.balance(l) < -1 or tree.balance(l) > 1) {
         return error{
             InvalidBalance,
         }.InvalidBalance;

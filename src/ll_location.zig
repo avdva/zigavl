@@ -8,52 +8,14 @@ fn MakeLLLocationType(comptime K: type, comptime V: type, comptime Tags: type) t
     return struct {
         const Self = @This();
         const Node = makeNodeType(K, V, Self, Tags);
-        const NodeData = Node.NodeData;
+        pub const NodeData = Node.NodeData;
 
         addr: ll.Address,
-        list: *ll.LinkedArrayList(Node),
 
-        fn init(addr: ll.Address, list: *ll.LinkedArrayList(Node)) Self {
+        fn init(addr: ll.Address) Self {
             return Self{
                 .addr = addr,
-                .list = list,
             };
-        }
-
-        pub fn eq(self: *const Self, other: Self) bool {
-            return self.addr == other.addr;
-        }
-
-        pub fn data(self: *const Self) *NodeData {
-            return &self.list.*.getPtr(self.addr).*.data;
-        }
-
-        pub fn child(self: *const Self, comptime dir: direction) ?Self {
-            const ptr = self.list.*.getPtr(self.addr);
-            switch (dir) {
-                .left => return ptr.*.left,
-                .right => return ptr.*.right,
-                else => unreachable,
-            }
-        }
-
-        pub fn setChild(self: *Self, comptime dir: direction, loc: ?Self) void {
-            const ptr = self.list.*.getPtr(self.addr);
-            switch (dir) {
-                .left => ptr.*.left = loc,
-                .right => ptr.*.right = loc,
-                else => unreachable,
-            }
-        }
-
-        pub fn parent(self: *const Self) ?Self {
-            const ptr = self.list.*.getPtr(self.addr);
-            return ptr.*.parent;
-        }
-
-        pub fn setParent(self: *Self, p: ?Self) void {
-            const ptr = self.list.*.getPtr(self.addr);
-            ptr.*.parent = p;
         }
     };
 }
@@ -78,8 +40,8 @@ pub fn LocationCache(comptime K: type, comptime V: type, comptime Tags: type) ty
         }
 
         pub fn create(self: *Self) !Location {
-            const node = try self.list.push(Location.Node.init());
-            return Location.init(node, &self.list);
+            const addr = try self.list.push(Location.Node.init());
+            return Location.init(addr);
         }
 
         pub fn destroy(self: *Self, loc: Location) void {
@@ -88,6 +50,42 @@ pub fn LocationCache(comptime K: type, comptime V: type, comptime Tags: type) ty
 
         pub fn fastDeinitAllowed(self: *Self) bool {
             return utils.fastDeinitAllowed(self.a);
+        }
+
+        fn node(self: *Self, loc: Location) *Location.Node {
+            return self.list.getPtr(loc.addr);
+        }
+
+        pub fn eq(_: *Self, lhs: Location, rhs: Location) bool {
+            return lhs.addr == rhs.addr;
+        }
+
+        pub fn data(self: *Self, loc: Location) *Location.NodeData {
+            return &self.node(loc).data;
+        }
+
+        pub fn child(self: *Self, loc: Location, comptime dir: direction) ?Location {
+            switch (dir) {
+                .left => return self.node(loc).left,
+                .right => return self.node(loc).right,
+                else => unreachable,
+            }
+        }
+
+        pub fn setChild(self: *Self, loc: *Location, comptime dir: direction, child_loc: ?Location) void {
+            switch (dir) {
+                .left => self.node(loc.*).left = child_loc,
+                .right => self.node(loc.*).right = child_loc,
+                else => unreachable,
+            }
+        }
+
+        pub fn parent(self: *Self, loc: Location) ?Location {
+            return self.node(loc).parent;
+        }
+
+        pub fn setParent(self: *Self, loc: *Location, p: ?Location) void {
+            self.node(loc.*).parent = p;
         }
     };
 }

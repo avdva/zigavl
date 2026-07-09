@@ -1,6 +1,6 @@
 const std = @import("std");
+const address = @import("address.zig");
 const direction = @import("direction.zig").direction;
-const ll = @import("linked_arraylist.zig");
 const makeNodeType = @import("node.zig").MakeNodeType;
 const utils = @import("utils.zig");
 
@@ -11,70 +11,32 @@ pub fn LocationCache(comptime K: type, comptime V: type, comptime Tags: type) ty
         pub const Location = struct {
             const Loc = @This();
             const Node = makeNodeType(K, V, Loc, Tags);
-            const NodeData = Node.NodeData;
+            pub const NodeData = Node.NodeData;
 
-            addr: ll.Address,
-            cache: *Self,
+            addr: address.Address,
 
-            fn init(addr: ll.Address, cache: *Self) Loc {
+            fn init(addr: address.Address) Loc {
                 return Loc{
                     .addr = addr,
-                    .cache = cache,
                 };
-            }
-
-            fn node(self: *const Loc) *Node {
-                return &self.cache.nodes.items[self.addr].node;
-            }
-
-            pub fn eq(self: *const Loc, other: Loc) bool {
-                return self.addr == other.addr;
-            }
-
-            pub fn data(self: *const Loc) *NodeData {
-                return &self.node().data;
-            }
-
-            pub fn child(self: *const Loc, comptime dir: direction) ?Loc {
-                switch (dir) {
-                    .left => return self.node().left,
-                    .right => return self.node().right,
-                    else => unreachable,
-                }
-            }
-
-            pub fn setChild(self: *Loc, comptime dir: direction, loc: ?Loc) void {
-                switch (dir) {
-                    .left => self.node().left = loc,
-                    .right => self.node().right = loc,
-                    else => unreachable,
-                }
-            }
-
-            pub fn parent(self: *const Loc) ?Loc {
-                return self.node().parent;
-            }
-
-            pub fn setParent(self: *Loc, p: ?Loc) void {
-                self.node().parent = p;
             }
         };
 
-        const Slot = struct {
-            node: Location.Node,
-            next_free: ll.Address = ll.InvalidAddr,
+        const Slot = union {
+            used: Location.Node,
+            free: address.Address,
         };
 
         a: std.mem.Allocator,
         nodes: std.ArrayList(Slot),
-        free_head: ll.Address,
+        free_head: address.Address,
         free_count: usize,
 
         pub fn init(a: std.mem.Allocator) !Self {
             return Self{
                 .a = a,
                 .nodes = try std.ArrayList(Slot).initCapacity(a, 16),
-                .free_head = ll.InvalidAddr,
+                .free_head = address.InvalidAddr,
                 .free_count = 0,
             };
         }
@@ -84,29 +46,64 @@ pub fn LocationCache(comptime K: type, comptime V: type, comptime Tags: type) ty
         }
 
         pub fn create(self: *Self) !Location {
-            if (self.free_head != ll.InvalidAddr) {
+            if (self.free_head != address.InvalidAddr) {
                 const addr = self.free_head;
                 const slot = &self.nodes.items[addr];
-                self.free_head = slot.next_free;
+                self.free_head = slot.free;
                 self.free_count -= 1;
-                slot.* = Slot{ .node = Location.Node.init() };
-                return Location.init(addr, self);
+                slot.* = Slot{ .used = Location.Node.init() };
+                return Location.init(addr);
             }
 
-            const addr: ll.Address = @intCast(self.nodes.items.len);
-            try self.nodes.append(self.a, Slot{ .node = Location.Node.init() });
-            return Location.init(addr, self);
+            const addr: address.Address = @intCast(self.nodes.items.len);
+            try self.nodes.append(self.a, Slot{ .used = Location.Node.init() });
+            return Location.init(addr);
         }
 
         pub fn destroy(self: *Self, loc: Location) void {
-            const slot = &self.nodes.items[loc.addr];
-            slot.next_free = self.free_head;
+            self.nodes.items[loc.addr] = Slot{ .free = self.free_head };
             self.free_head = loc.addr;
             self.free_count += 1;
         }
 
         pub fn fastDeinitAllowed(self: *Self) bool {
             return utils.fastDeinitAllowed(self.a);
+        }
+
+        fn node(self: *Self, loc: Location) *Location.Node {
+            return &self.nodes.items[loc.addr].used;
+        }
+
+        pub fn eq(_: *Self, lhs: Location, rhs: Location) bool {
+            return lhs.addr == rhs.addr;
+        }
+
+        pub fn data(self: *Self, loc: Location) *Location.NodeData {
+            return &self.node(loc).data;
+        }
+
+        pub fn child(self: *Self, loc: Location, comptime dir: direction) ?Location {
+            switch (dir) {
+                .left => return self.node(loc).left,
+                .right => return self.node(loc).right,
+                else => unreachable,
+            }
+        }
+
+        pub fn setChild(self: *Self, loc: *Location, comptime dir: direction, child_loc: ?Location) void {
+            switch (dir) {
+                .left => self.node(loc.*).left = child_loc,
+                .right => self.node(loc.*).right = child_loc,
+                else => unreachable,
+            }
+        }
+
+        pub fn parent(self: *Self, loc: Location) ?Location {
+            return self.node(loc).parent;
+        }
+
+        pub fn setParent(self: *Self, loc: *Location, p: ?Location) void {
+            self.node(loc.*).parent = p;
         }
     };
 }

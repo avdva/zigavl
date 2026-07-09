@@ -1,7 +1,7 @@
 const std = @import("std");
 const zigavl = @import("./lib.zig");
 
-const bench_len = 50_000;
+const bench_len = 250_000;
 const posix = std.posix;
 
 fn i64Cmp(a: i64, b: i64) std.math.Order {

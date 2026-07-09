@@ -7,7 +7,7 @@ fn MakePtrLocationType(comptime K: type, comptime V: type, comptime Tags: type) 
     return struct {
         const Self = @This();
         const Node = makeNodeType(K, V, Self, Tags);
-        const NodeData = Node.NodeData;
+        pub const NodeData = Node.NodeData;
 
         ptr: *Node,
 
@@ -78,6 +78,30 @@ pub fn LocationCache(comptime K: type, comptime V: type, comptime Tags: type) ty
 
         pub fn fastDeinitAllowed(self: *Self) bool {
             return utils.fastDeinitAllowed(self.a);
+        }
+
+        pub fn eq(_: *Self, lhs: Location, rhs: Location) bool {
+            return lhs.eq(rhs);
+        }
+
+        pub fn data(_: *Self, loc: Location) *Location.NodeData {
+            return loc.data();
+        }
+
+        pub fn child(_: *Self, loc: Location, comptime dir: direction) ?Location {
+            return loc.child(dir);
+        }
+
+        pub fn setChild(_: *Self, loc: *Location, comptime dir: direction, child_loc: ?Location) void {
+            loc.setChild(dir, child_loc);
+        }
+
+        pub fn parent(_: *Self, loc: Location) ?Location {
+            return loc.parent();
+        }
+
+        pub fn setParent(_: *Self, loc: *Location, p: ?Location) void {
+            loc.setParent(p);
         }
     };
 }
