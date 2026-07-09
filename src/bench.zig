@@ -164,6 +164,5 @@ pub fn main() !void {
 
     std.debug.print("zigavl basic benchmarks: {d} items\n", .{bench_len});
     try benchTree("pointer", .{ .nodeCacheType = .PointerBased }, a, random_keys);
-    try benchTree("list", .{ .nodeCacheType = .ListBased }, a, random_keys);
     try benchTree("array", .{ .nodeCacheType = .ArrayBased }, a, random_keys);
 }

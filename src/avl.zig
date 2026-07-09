@@ -2,12 +2,10 @@ const std = @import("std");
 const math = std.math;
 const direction = @import("direction.zig").direction;
 const ptrLocationCache = @import("ptr_location.zig").LocationCache;
-const llLocationCache = @import("ll_location.zig").LocationCache;
 const arrayLocationCache = @import("array_location.zig").LocationCache;
 
 pub const NodeCacheType = enum(u8) {
     PointerBased,
-    ListBased,
     ArrayBased,
 };
 
@@ -58,7 +56,6 @@ pub fn TreeWithOptions(comptime K: type, comptime V: type, comptime Cmp: fn (a: 
         const ValueType = V;
         const Cache = blk: {
             const cacheType = switch (options.nodeCacheType) {
-                .ListBased => llLocationCache(K, V, Tags),
                 .ArrayBased => arrayLocationCache(K, V, Tags),
                 .PointerBased => ptrLocationCache(K, V, Tags),
             };
@@ -1366,10 +1363,6 @@ fn testTreeRandom(comptime options: Options) !void {
 
 test "tree random (pointer cache)" {
     try testTreeRandom(.{ .countChildren = true, .nodeCacheType = .PointerBased });
-}
-
-test "tree random (list cache)" {
-    try testTreeRandom(.{ .countChildren = true, .nodeCacheType = .ListBased });
 }
 
 test "tree random (array cache)" {
