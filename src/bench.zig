@@ -107,6 +107,110 @@ fn benchRandomDelete(comptime name: []const u8, comptime options: zigavl.Options
     report(name ++ "/delete/random", keys.len, nowNs() - start, checksum);
 }
 
+fn benchRandomUpdateKey(comptime name: []const u8, comptime options: zigavl.Options, a: std.mem.Allocator, keys: []const i64) !void {
+    const Tree = zigavl.TreeWithOptions(i64, i64, i64Cmp, options);
+    var tree = try Tree.init(a);
+    defer tree.deinit();
+
+    for (0..bench_len) |idx| {
+        const key: i64 = @intCast(idx);
+        _ = try tree.insert(key, key);
+    }
+
+    const offset: i64 = @intCast(bench_len);
+    var checksum: i64 = 0;
+    const start = nowNs();
+    for (keys) |key| {
+        checksum += (try tree.updateKey(key, key + offset)).?.*;
+    }
+    report(name ++ "/updateKey/random", keys.len, nowNs() - start, checksum);
+}
+
+fn benchRandomDeleteInsert(comptime name: []const u8, comptime options: zigavl.Options, a: std.mem.Allocator, keys: []const i64) !void {
+    const Tree = zigavl.TreeWithOptions(i64, i64, i64Cmp, options);
+    var tree = try Tree.init(a);
+    defer tree.deinit();
+
+    for (0..bench_len) |idx| {
+        const key: i64 = @intCast(idx);
+        _ = try tree.insert(key, key);
+    }
+
+    const offset: i64 = @intCast(bench_len);
+    var checksum: i64 = 0;
+    const start = nowNs();
+    for (keys) |key| {
+        const value = tree.delete(key).?;
+        checksum += (try tree.insert(key + offset, value)).v.*;
+    }
+    report(name ++ "/delete-insert/random", keys.len, nowNs() - start, checksum);
+}
+
+fn fillMixedUpdateKeyTree(comptime Tree: type, tree: *Tree, group_count: usize) !void {
+    for (0..group_count) |group| {
+        const base: i64 = @intCast(group * 8);
+        _ = try tree.insert(base, base);
+        _ = try tree.insert(base + 2, base + 2);
+        _ = try tree.insert(base + 4, base + 4);
+        _ = try tree.insert(base + 6, base + 6);
+    }
+}
+
+fn mixedUpdateKeys(group_count: usize, op_id: usize) struct { old_key: i64, new_key: i64 } {
+    const group = op_id / 3;
+    const kind = op_id % 3;
+    const base: i64 = @intCast(group * 8);
+    const far_base: i64 = @intCast(group_count * 8 + 1024);
+    return switch (kind) {
+        0 => .{ .old_key = base + 2, .new_key = base + 3 }, // in-place
+        1 => .{ .old_key = base, .new_key = base + 4 }, // overwrite existing
+        else => .{ .old_key = base + 6, .new_key = far_base + @as(i64, @intCast(group)) }, // generic
+    };
+}
+
+fn benchMixedUpdateKey(comptime name: []const u8, comptime options: zigavl.Options, a: std.mem.Allocator) !void {
+    const Tree = zigavl.TreeWithOptions(i64, i64, i64Cmp, options);
+    var tree = try Tree.init(a);
+    defer tree.deinit();
+
+    const group_count = bench_len / 4;
+    const op_count = group_count * 3;
+    try fillMixedUpdateKeyTree(Tree, &tree, group_count);
+
+    const op_ids = try makeKeys(a, op_count, true);
+    defer a.free(op_ids);
+
+    var checksum: i64 = 0;
+    const start = nowNs();
+    for (op_ids) |op_id| {
+        const keys = mixedUpdateKeys(group_count, @intCast(op_id));
+        checksum += (try tree.updateKey(keys.old_key, keys.new_key)).?.*;
+    }
+    report(name ++ "/updateKey/mixed", op_count, nowNs() - start, checksum);
+}
+
+fn benchMixedDeleteInsert(comptime name: []const u8, comptime options: zigavl.Options, a: std.mem.Allocator) !void {
+    const Tree = zigavl.TreeWithOptions(i64, i64, i64Cmp, options);
+    var tree = try Tree.init(a);
+    defer tree.deinit();
+
+    const group_count = bench_len / 4;
+    const op_count = group_count * 3;
+    try fillMixedUpdateKeyTree(Tree, &tree, group_count);
+
+    const op_ids = try makeKeys(a, op_count, true);
+    defer a.free(op_ids);
+
+    var checksum: i64 = 0;
+    const start = nowNs();
+    for (op_ids) |op_id| {
+        const keys = mixedUpdateKeys(group_count, @intCast(op_id));
+        const value = tree.delete(keys.old_key).?;
+        checksum += (try tree.insert(keys.new_key, value)).v.*;
+    }
+    report(name ++ "/delete-insert/mixed", op_count, nowNs() - start, checksum);
+}
+
 fn benchIterator(comptime name: []const u8, comptime options: zigavl.Options, a: std.mem.Allocator) !void {
     const Tree = zigavl.TreeWithOptions(i64, i64, i64Cmp, options);
     var tree = try Tree.init(a);
@@ -150,6 +254,10 @@ fn benchTree(comptime name: []const u8, comptime options: zigavl.Options, a: std
     try benchRandomInsert(name, options, a, random_keys);
     try benchRandomGet(name, options, a, random_keys);
     try benchRandomDelete(name, options, a, random_keys);
+    try benchRandomUpdateKey(name, options, a, random_keys);
+    try benchRandomDeleteInsert(name, options, a, random_keys);
+    try benchMixedUpdateKey(name, options, a);
+    try benchMixedDeleteInsert(name, options, a);
     try benchIterator(name, options, a);
     try benchAtCountChildren(name, .{
         .countChildren = true,

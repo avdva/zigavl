@@ -30,6 +30,7 @@ pub fn deinit()
 pub fn insert(self: *Self, k: K, v: V) !InsertResult
 pub fn getOrInsert(self: *Self, k: K, v: V) !InsertResult 
 pub fn getOrEmplace(self: *Self, k: K, ctor: fn (v: *V, args: anytype) void, args: anytype) !InsertResult
+pub fn updateKey(self: *Self, old_key: K, new_key: K) !?*V
 
 // delete:
 pub fn delete(self: *Self, k: K) ?V

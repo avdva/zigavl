@@ -485,6 +485,71 @@ fn InitTreeType(comptime K: type, comptime V: type, comptime Cache: type, compti
             self.lc.destroy(loc);
         }
 
+        fn canUpdateKeyInPlace(self: *Self, loc: Location, new_key: K) bool {
+            if (self.prevInOrderLocation(loc)) |prev| {
+                if (Comparer(self.data(prev).k, new_key) != .lt) {
+                    return false;
+                }
+            }
+            if (self.nextInOrderLocation(loc)) |next| {
+                if (Comparer(new_key, self.data(next).k) != .lt) {
+                    return false;
+                }
+            }
+            return true;
+        }
+
+        fn resetDetachedLocation(self: *Self, loc: Location, k: K, v: V) void {
+            var mut_loc = loc;
+            self.setChild(&mut_loc, .left, null);
+            self.setChild(&mut_loc, .right, null);
+            self.setParent(&mut_loc, null);
+
+            const data_ptr = self.data(loc);
+            data_ptr.* = Location.NodeData{};
+            data_ptr.*.tags = .{};
+            data_ptr.*.k = k;
+            data_ptr.*.v = v;
+        }
+
+        // updateKey changes a node key while preserving its value.
+        // If new_key already exists, the old value replaces the existing value
+        // and old_key is removed. Returns null when old_key is not present.
+        // Time complexity: O(logn).
+        pub fn updateKey(self: *Self, old_key: K, new_key: K) !?*V {
+            const old_res = self.locate(old_key);
+            if (old_res.dir != .center) {
+                return null;
+            }
+            const old_loc = old_res.loc orelse return null;
+            const old_data = self.data(old_loc);
+
+            if (Comparer(old_data.k, new_key) == .eq) {
+                old_data.k = new_key;
+                return &old_data.v;
+            }
+
+            const new_res = self.locate(new_key);
+            if (new_res.dir == .center) {
+                const new_loc = new_res.loc orelse unreachable;
+                const old_value = old_data.v;
+                self.data(new_loc).v = old_value;
+                self.deleteLocation(old_loc);
+                return &self.data(new_loc).v;
+            }
+
+            if (self.canUpdateKeyInPlace(old_loc, new_key)) {
+                old_data.k = new_key;
+                return &old_data.v;
+            }
+
+            const old_value = old_data.v;
+            self.deleteAndReplace(old_loc);
+            self.resetDetachedLocation(old_loc, new_key, old_value);
+            self.insertNew(new_res, old_loc);
+            return &self.data(old_loc).v;
+        }
+
         // delete deletes a node from the tree.
         // Returns the value associated with k, if the node was present in the tree.
         // Time complexity: O(logn).
@@ -1099,6 +1164,130 @@ test "tree delete" {
         try checkHeightAndBalance(&t);
         i -= 1;
     }
+}
+
+fn testTreeUpdateKey(comptime options: Options) !void {
+    const a = std.testing.allocator;
+    const TreeType = TreeWithOptions(i64, i64, i64Cmp, options);
+
+    {
+        var t = try TreeType.init(a);
+        defer t.deinit();
+        _ = try t.insert(1, 10);
+        try std.testing.expectEqual(@as(?*i64, null), try t.updateKey(2, 3));
+        try std.testing.expectEqual(@as(usize, 1), t.len());
+        try std.testing.expectEqual(@as(i64, 10), t.get(1).?.*);
+        try checkHeightAndBalance(&t);
+    }
+
+    {
+        var t = try TreeType.init(a);
+        defer t.deinit();
+        _ = try t.insert(1, 10);
+        const v = (try t.updateKey(1, 1)).?;
+        try std.testing.expectEqual(@as(i64, 10), v.*);
+        try std.testing.expectEqual(@as(usize, 1), t.len());
+        try std.testing.expectEqual(@as(i64, 10), t.get(1).?.*);
+        try checkHeightAndBalance(&t);
+    }
+
+    {
+        var t = try TreeType.init(a);
+        defer t.deinit();
+        _ = try t.insert(1, 10);
+        _ = try t.insert(2, 20);
+        const v = (try t.updateKey(1, 2)).?;
+        try std.testing.expectEqual(@as(i64, 10), v.*);
+        try std.testing.expectEqual(@as(usize, 1), t.len());
+        try std.testing.expectEqual(@as(?*i64, null), t.get(1));
+        try std.testing.expectEqual(@as(i64, 10), t.get(2).?.*);
+        try checkHeightAndBalance(&t);
+    }
+
+    {
+        var t = try TreeType.init(a);
+        defer t.deinit();
+        _ = try t.insert(1, 10);
+        _ = try t.insert(3, 30);
+        _ = try t.insert(5, 50);
+        const v = (try t.updateKey(3, 4)).?;
+        try std.testing.expectEqual(@as(i64, 30), v.*);
+        try std.testing.expectEqual(@as(usize, 3), t.len());
+        try std.testing.expectEqual(@as(?*i64, null), t.get(3));
+        try std.testing.expectEqual(@as(i64, 30), t.get(4).?.*);
+        try std.testing.expectEqual(@as(i64, 1), t.getMin().?.Key);
+        try std.testing.expectEqual(@as(i64, 5), t.getMax().?.Key);
+        try checkHeightAndBalance(&t);
+    }
+
+    {
+        var t = try TreeType.init(a);
+        defer t.deinit();
+        var i: i64 = 1;
+        while (i <= 8) : (i += 1) {
+            _ = try t.insert(i, i * 10);
+        }
+        const v = (try t.updateKey(2, 9)).?;
+        try std.testing.expectEqual(@as(i64, 20), v.*);
+        try std.testing.expectEqual(@as(usize, 8), t.len());
+        try std.testing.expectEqual(@as(?*i64, null), t.get(2));
+        try std.testing.expectEqual(@as(i64, 20), t.get(9).?.*);
+        try std.testing.expectEqual(@as(i64, 1), t.getMin().?.Key);
+        try std.testing.expectEqual(@as(i64, 9), t.getMax().?.Key);
+        try checkHeightAndBalance(&t);
+
+        var it = t.ascendFromStart();
+        var prev: ?i64 = null;
+        while (it.value()) |entry| {
+            if (prev) |p| {
+                try std.testing.expect(p < entry.Key);
+            }
+            prev = entry.Key;
+            it.next();
+        }
+    }
+
+    {
+        var t = try TreeType.init(a);
+        defer t.deinit();
+        var keys: [128]i64 = undefined;
+        for (&keys, 0..) |*key, idx| {
+            key.* = @intCast(idx);
+            _ = try t.insert(key.*, key.* * 10);
+        }
+        var r = std.Random.DefaultPrng.init(1);
+        r.random().shuffle(i64, &keys);
+
+        for (keys) |key| {
+            const new_key = key + 1024;
+            const v = (try t.updateKey(key, new_key)).?;
+            try std.testing.expectEqual(key * 10, v.*);
+            try std.testing.expectEqual(@as(?*i64, null), t.get(key));
+            try std.testing.expectEqual(key * 10, t.get(new_key).?.*);
+            try checkHeightAndBalance(&t);
+        }
+
+        var it = t.ascendFromStart();
+        var prev: ?i64 = null;
+        var count: usize = 0;
+        while (it.value()) |entry| {
+            if (prev) |p| {
+                try std.testing.expect(p < entry.Key);
+            }
+            prev = entry.Key;
+            count += 1;
+            it.next();
+        }
+        try std.testing.expectEqual(@as(usize, keys.len), count);
+    }
+}
+
+test "tree updateKey (pointer cache)" {
+    try testTreeUpdateKey(.{ .countChildren = true, .nodeCacheType = .PointerBased });
+}
+
+test "tree updateKey (array cache)" {
+    try testTreeUpdateKey(.{ .countChildren = true, .nodeCacheType = .ArrayBased });
 }
 
 test "delete min" {
