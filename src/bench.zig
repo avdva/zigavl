@@ -121,7 +121,7 @@ fn benchRandomUpdateKey(comptime name: []const u8, comptime options: zigavl.Opti
     var checksum: i64 = 0;
     const start = nowNs();
     for (keys) |key| {
-        checksum += (try tree.updateKey(key, key + offset)).?.*;
+        checksum += tree.updateKey(key, key + offset).?.*;
     }
     report(name ++ "/updateKey/random", keys.len, nowNs() - start, checksum);
 }
@@ -184,7 +184,7 @@ fn benchMixedUpdateKey(comptime name: []const u8, comptime options: zigavl.Optio
     const start = nowNs();
     for (op_ids) |op_id| {
         const keys = mixedUpdateKeys(group_count, @intCast(op_id));
-        checksum += (try tree.updateKey(keys.old_key, keys.new_key)).?.*;
+        checksum += tree.updateKey(keys.old_key, keys.new_key).?.*;
     }
     report(name ++ "/updateKey/mixed", op_count, nowNs() - start, checksum);
 }

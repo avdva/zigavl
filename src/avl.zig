@@ -516,7 +516,7 @@ fn InitTreeType(comptime K: type, comptime V: type, comptime Cache: type, compti
         // If new_key already exists, the old value replaces the existing value
         // and old_key is removed. Returns null when old_key is not present.
         // Time complexity: O(logn).
-        pub fn updateKey(self: *Self, old_key: K, new_key: K) !?*V {
+        pub fn updateKey(self: *Self, old_key: K, new_key: K) ?*V {
             const old_res = self.locate(old_key);
             if (old_res.dir != .center) {
                 return null;
@@ -1174,7 +1174,7 @@ fn testTreeUpdateKey(comptime options: Options) !void {
         var t = try TreeType.init(a);
         defer t.deinit();
         _ = try t.insert(1, 10);
-        try std.testing.expectEqual(@as(?*i64, null), try t.updateKey(2, 3));
+        try std.testing.expectEqual(@as(?*i64, null), t.updateKey(2, 3));
         try std.testing.expectEqual(@as(usize, 1), t.len());
         try std.testing.expectEqual(@as(i64, 10), t.get(1).?.*);
         try checkHeightAndBalance(&t);
@@ -1184,7 +1184,7 @@ fn testTreeUpdateKey(comptime options: Options) !void {
         var t = try TreeType.init(a);
         defer t.deinit();
         _ = try t.insert(1, 10);
-        const v = (try t.updateKey(1, 1)).?;
+        const v = t.updateKey(1, 1).?;
         try std.testing.expectEqual(@as(i64, 10), v.*);
         try std.testing.expectEqual(@as(usize, 1), t.len());
         try std.testing.expectEqual(@as(i64, 10), t.get(1).?.*);
@@ -1196,7 +1196,7 @@ fn testTreeUpdateKey(comptime options: Options) !void {
         defer t.deinit();
         _ = try t.insert(1, 10);
         _ = try t.insert(2, 20);
-        const v = (try t.updateKey(1, 2)).?;
+        const v = t.updateKey(1, 2).?;
         try std.testing.expectEqual(@as(i64, 10), v.*);
         try std.testing.expectEqual(@as(usize, 1), t.len());
         try std.testing.expectEqual(@as(?*i64, null), t.get(1));
@@ -1210,7 +1210,7 @@ fn testTreeUpdateKey(comptime options: Options) !void {
         _ = try t.insert(1, 10);
         _ = try t.insert(3, 30);
         _ = try t.insert(5, 50);
-        const v = (try t.updateKey(3, 4)).?;
+        const v = t.updateKey(3, 4).?;
         try std.testing.expectEqual(@as(i64, 30), v.*);
         try std.testing.expectEqual(@as(usize, 3), t.len());
         try std.testing.expectEqual(@as(?*i64, null), t.get(3));
@@ -1227,7 +1227,7 @@ fn testTreeUpdateKey(comptime options: Options) !void {
         while (i <= 8) : (i += 1) {
             _ = try t.insert(i, i * 10);
         }
-        const v = (try t.updateKey(2, 9)).?;
+        const v = t.updateKey(2, 9).?;
         try std.testing.expectEqual(@as(i64, 20), v.*);
         try std.testing.expectEqual(@as(usize, 8), t.len());
         try std.testing.expectEqual(@as(?*i64, null), t.get(2));
@@ -1260,7 +1260,7 @@ fn testTreeUpdateKey(comptime options: Options) !void {
 
         for (keys) |key| {
             const new_key = key + 1024;
-            const v = (try t.updateKey(key, new_key)).?;
+            const v = t.updateKey(key, new_key).?;
             try std.testing.expectEqual(key * 10, v.*);
             try std.testing.expectEqual(@as(?*i64, null), t.get(key));
             try std.testing.expectEqual(key * 10, t.get(new_key).?.*);

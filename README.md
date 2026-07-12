@@ -30,7 +30,7 @@ pub fn deinit()
 pub fn insert(self: *Self, k: K, v: V) !InsertResult
 pub fn getOrInsert(self: *Self, k: K, v: V) !InsertResult 
 pub fn getOrEmplace(self: *Self, k: K, ctor: fn (v: *V, args: anytype) void, args: anytype) !InsertResult
-pub fn updateKey(self: *Self, old_key: K, new_key: K) !?*V
+pub fn updateKey(self: *Self, old_key: K, new_key: K) ?*V
 
 // delete:
 pub fn delete(self: *Self, k: K) ?V
@@ -82,7 +82,7 @@ pub fn main() !void {
     defer _ = gpa.detectLeaks();
     // first, create an i64-->i64 tree
     const TreeType = zigavl.TreeWithOptions(i64, i64, i64Cmp, .{ .countChildren = true });
-    var t = try TreeType.init(gpa.allocator());
+    var t = try TreeType.initWithOptions(gpa.allocator(), .{ .allowFastDeinit = .auto });
     defer t.deinit();
     // add some elements
     var i: i64 = 10;
@@ -137,6 +137,12 @@ pub fn main() !void {
         }
     } else {
         @panic("invalid iterator");
+    }
+
+    // update key preserving old value.
+    const updated_key_value = t.updateKey(5, 15);
+    if (updated_key_value.?.* != 5) {
+        @panic("invalid value");
     }
 }
 

@@ -91,8 +91,8 @@ test "tree example usage" {
         @panic("invalid iterator");
     }
 
-    const updated_key_value = try t.updateKey(5, 15);
+    const updated_key_value = t.updateKey(5, 15);
     if (updated_key_value.?.* != 5) {
-         @panic("invalid value");
+        @panic("invalid value");
     }
 }
