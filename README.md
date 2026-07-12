@@ -13,6 +13,7 @@ To use this library, you need at least Zig 0.16.x.
 // create tree type:
 pub const Options = struct {
     countChildren: bool = false,
+    nodeCacheType: NodeCacheType = .PointerBased,
 };
 pub fn TreeWithOptions(comptime K: type, comptime V: type, comptime Cmp: fn (a: K, b: K) math.Order, comptime options: Options) type
 pub fn Tree(comptime K: type, comptime V: type, comptime Cmp: fn (a: K, b: K) math.Order) type
@@ -21,8 +22,8 @@ pub fn Tree(comptime K: type, comptime V: type, comptime Cmp: fn (a: K, b: K) ma
 pub const InitOptions = struct {
     allowFastDeinit: enum { always, auto, never } = .never,
 };
-pub fn init(a: std.mem.Allocator) Self
-pub fn initWithOptions(a: std.mem.Allocator, io: InitOptions) Self
+pub fn init(a: std.mem.Allocator) !Self
+pub fn initWithOptions(a: std.mem.Allocator, io: InitOptions) !Self
 pub fn deinit()
 
 // insert:
@@ -60,6 +61,7 @@ pub fn descendFromEnd(self: *Self) Iterator
 
 Notes:
 - `countChildren = true` enables `O(logn)` positional access. It stores child counts as `u32`, so trees larger than `maxInt(u32) + 1` elements are not supported in this mode.
+- `nodeCacheType = .ArrayBased` stores tree nodes in an array-backed free-list cache instead of allocating each node separately.
 - `Entry.Value` points into the tree and can be used to update the stored value. `KV.Value` is an owned value copied out from a deleted node.
 - Iterators are valid only for the tree that created them. If the node pointed to by an iterator is deleted, that iterator becomes invalid; use the iterator returned by `deleteIterator`.
 
@@ -79,7 +81,7 @@ pub fn main() !void {
     defer _ = gpa.detectLeaks();
     // first, create an i64-->i64 tree
     const TreeType = zigavl.TreeWithOptions(i64, i64, i64Cmp, .{ .countChildren = true });
-    var t = TreeType.init(gpa.allocator());
+    var t = try TreeType.init(gpa.allocator());
     defer t.deinit();
     // add some elements
     var i: i64 = 10;

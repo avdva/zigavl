@@ -1,155 +1,20 @@
 const std = @import("std");
 const math = std.math;
+const direction = @import("direction.zig").direction;
+const ptrLocationCache = @import("ptr_location.zig").LocationCache;
+const arrayLocationCache = @import("array_location.zig").LocationCache;
 
-const direction = enum {
-    left,
-    center,
-    right,
-
-    fn invert(self: direction) direction {
-        switch (self) {
-            .left => return .right,
-            .right => return .left,
-            .center => return .center,
-        }
-    }
+pub const NodeCacheType = enum(u8) {
+    PointerBased,
+    ArrayBased,
 };
-
-fn makeNodeData(comptime K: type, comptime V: type, comptime Tags: type) type {
-    return struct {
-        const Self = @This();
-        k: K = undefined,
-        v: V = undefined,
-        tags: Tags = undefined,
-        h: u8 = 0,
-
-        fn setHeight(self: *Self, h: u8) bool {
-            const old = self.h;
-            self.h = h;
-            return old != h;
-        }
-    };
-}
-
-fn makeNode(comptime K: type, comptime V: type, comptime L: type, comptime Tags: type) type {
-    return struct {
-        const Self = @This();
-        const NodeData = makeNodeData(K, V, Tags);
-
-        data: NodeData,
-        left: ?L,
-        right: ?L,
-        parent: ?L,
-
-        fn init() Self {
-            return Self{
-                .data = NodeData{},
-                .left = null,
-                .right = null,
-                .parent = null,
-            };
-        }
-    };
-}
-
-fn makePtrLocationType(comptime K: type, comptime V: type, comptime Tags: type) type {
-    return struct {
-        const Self = @This();
-        const Node = makeNode(K, V, Self, Tags);
-        const NodeData = Node.NodeData;
-
-        ptr: *Node,
-
-        fn init(ptr: *Node) Self {
-            return Self{
-                .ptr = ptr,
-            };
-        }
-
-        fn eq(self: *const Self, other: Self) bool {
-            return self.ptr == other.ptr;
-        }
-
-        fn data(self: *const Self) *NodeData {
-            return &self.ptr.data;
-        }
-
-        fn child(self: *const Self, comptime dir: direction) ?Self {
-            switch (dir) {
-                .left => return self.ptr.*.left,
-                .right => return self.ptr.*.right,
-                else => unreachable,
-            }
-        }
-
-        fn setChild(self: *Self, comptime dir: direction, loc: ?Self) void {
-            switch (dir) {
-                .left => self.ptr.*.left = loc,
-                .right => self.ptr.*.right = loc,
-                else => unreachable,
-            }
-        }
-
-        fn parent(self: *const Self) ?Self {
-            return self.ptr.*.parent;
-        }
-
-        fn setParent(self: *Self, p: ?Self) void {
-            self.ptr.*.parent = p;
-        }
-    };
-}
-
-fn locationCache(comptime K: type, comptime V: type, comptime Tags: type) type {
-    return struct {
-        const Self = @This();
-        const Location = makePtrLocationType(K, V, Tags);
-
-        a: std.mem.Allocator,
-
-        fn init(a: std.mem.Allocator) Self {
-            return Self{
-                .a = a,
-            };
-        }
-
-        const allocAddrs = blk: {
-            var aa: std.heap.ArenaAllocator = undefined;
-            const aaa = aa.allocator();
-            var fba: std.heap.FixedBufferAllocator = undefined;
-            const fbaa = fba.allocator();
-            break :blk [_]*const anyopaque{
-                @ptrCast(@alignCast(aaa.vtable.alloc)),
-                @ptrCast(@alignCast(fbaa.vtable.alloc)),
-            };
-        };
-
-        fn fastDeinitAllowed(self: *Self) bool {
-            const ourAllocAddr: *const anyopaque = @ptrCast(@alignCast(self.a.vtable.alloc));
-            inline for (allocAddrs) |ptr| {
-                if (ourAllocAddr == ptr) return true;
-            }
-            return false;
-        }
-
-        fn create(self: *Self) !Location {
-            const node = try self.a.create(Location.Node);
-            node.* = Location.Node.init();
-            return Location.init(node);
-        }
-
-        fn destroy(self: *Self, loc: Location) void {
-            self.a.destroy(loc.ptr);
-        }
-    };
-}
 
 // Options defines some comptime parameters of the tree type.
 pub const Options = struct {
     // countChildren, if set, enables children counts for every node of the tree.
     // the number of children allows to locate a node by its position with a guaranteed complexity O(logn).
-    // With countChildren enabled, trees larger than maxInt(u32) + 1 elements are not supported.
     countChildren: bool = false,
+    nodeCacheType: NodeCacheType = .PointerBased,
 };
 
 // InitOptions defines some runtime parameters of the tree instance.
@@ -179,16 +44,27 @@ pub fn Tree(comptime K: type, comptime V: type, comptime Cmp: fn (a: K, b: K) ma
 
 // TreeWithOptions acts like Tree func, but also accepts compile-known Options.
 pub fn TreeWithOptions(comptime K: type, comptime V: type, comptime Cmp: fn (a: K, b: K) math.Order, comptime options: Options) type {
+    const Tags = if (options.countChildren)
+        struct { childrenCount: u32 = 0 }
+    else
+        struct {};
+    const Cache = blk: {
+        const cacheType = switch (options.nodeCacheType) {
+            .ArrayBased => arrayLocationCache(K, V, Tags),
+            .PointerBased => ptrLocationCache(K, V, Tags),
+        };
+        break :blk cacheType;
+    };
+    return InitTreeType(K, V, Cache, Cmp, options);
+}
+
+fn InitTreeType(comptime K: type, comptime V: type, comptime Cache: type, comptime Cmp: fn (a: K, b: K) math.Order, comptime options: Options) type {
     return struct {
         const Self = @This();
-        const Tags = if (options.countChildren)
-            struct { childrenCount: u32 = 0 }
-        else
-            struct {};
 
         const KeyType = K;
         const ValueType = V;
-        const Cache = locationCache(K, V, Tags);
+
         const Location = Cache.Location;
         const Comparer = Cmp;
         const TreeOptions = options;
@@ -198,81 +74,94 @@ pub fn TreeWithOptions(comptime K: type, comptime V: type, comptime Cmp: fn (a: 
             dir: direction,
         };
 
-        // Entry is a view of an element that still lives in the tree.
-        // Value points into the tree and can be used to update the stored value.
-        // The pointer is valid until the corresponding node is deleted or the
-        // tree is deinitialized.
         pub const Entry = struct {
             Key: K,
             Value: *V,
         };
 
-        // KV is an owned key-value pair returned by deleteAt.
-        // Unlike Entry, Value is copied out because the node has been removed.
-        pub const KV = struct {
-            Key: K,
-            Value: V,
-        };
+        fn locEq(self: *Self, lhs: Location, rhs: Location) bool {
+            return self.lc.eq(lhs, rhs);
+        }
 
-        fn goLeft(loc: Location) Location {
+        fn data(self: *Self, loc: Location) *Location.NodeData {
+            return self.lc.data(loc);
+        }
+
+        fn child(self: *Self, loc: Location, comptime dir: direction) ?Location {
+            return self.lc.child(loc, dir);
+        }
+
+        fn setChild(self: *Self, loc: *Location, comptime dir: direction, child_loc: ?Location) void {
+            self.lc.setChild(loc, dir, child_loc);
+        }
+
+        fn parent(self: *Self, loc: Location) ?Location {
+            return self.lc.parent(loc);
+        }
+
+        fn setParent(self: *Self, loc: *Location, p: ?Location) void {
+            self.lc.setParent(loc, p);
+        }
+
+        fn goLeft(self: *Self, loc: Location) Location {
             var l = loc;
             while (true) {
-                const left = l.child(.left) orelse break;
+                const left = self.child(l, .left) orelse break;
                 l = left;
             }
             return l;
         }
 
-        fn goRight(loc: Location) Location {
+        fn goRight(self: *Self, loc: Location) Location {
             var r = loc;
             while (true) {
-                const right = r.child(.right) orelse break;
+                const right = self.child(r, .right) orelse break;
                 r = right;
             }
             return r;
         }
 
-        fn nextInOrderLocation(loc: Location) ?Location {
+        fn nextInOrderLocation(self: *Self, loc: Location) ?Location {
             var l = loc;
-            if (l.child(.right)) |r| {
-                return goLeft(r);
+            if (self.child(l, .right)) |r| {
+                return self.goLeft(r);
             }
             while (true) {
-                const parent = l.parent() orelse return null;
-                const dir = childDir(parent, l);
+                const p = self.parent(l) orelse return null;
+                const dir = self.childDir(p, l);
                 if (dir == .left or dir == .center) {
-                    return parent;
+                    return p;
                 }
-                l = parent;
+                l = p;
             }
         }
 
-        fn prevInOrderLocation(loc: Location) ?Location {
+        fn prevInOrderLocation(self: *Self, loc: Location) ?Location {
             var l = loc;
-            if (l.child(.left)) |left| {
-                return goRight(left);
+            if (self.child(l, .left)) |left| {
+                return self.goRight(left);
             }
             while (true) {
-                const parent = l.parent() orelse return null;
-                const dir = childDir(parent, l);
+                const p = self.parent(l) orelse return null;
+                const dir = self.childDir(p, l);
                 if (dir == .right or dir == .center) {
-                    return parent;
+                    return p;
                 }
-                l = parent;
+                l = p;
             }
         }
 
-        fn goLeftRight(loc: Location) ?Location {
+        fn goLeftRight(self: *Self, loc: Location) ?Location {
             var l = loc;
             while (true) {
-                l = goLeft(l);
-                var right = l.child(.right) orelse return l;
+                l = self.goLeft(l);
+                var right = self.child(l, .right) orelse return l;
                 while (true) {
-                    if (right.child(.left)) |right_left| {
+                    if (self.child(right, .left)) |right_left| {
                         l = right_left;
                         break;
                     }
-                    if (right.child(.right)) |right_right| {
+                    if (self.child(right, .right)) |right_right| {
                         right = right_right;
                     } else {
                         return right;
@@ -282,127 +171,124 @@ pub fn TreeWithOptions(comptime K: type, comptime V: type, comptime Cmp: fn (a: 
             return l;
         }
 
-        fn nextPostOrderLocation(loc: Location) ?Location {
-            var l = loc;
-            var parent = l.parent() orelse return null;
-            const dir = childDir(parent, l);
+        fn nextPostOrderLocation(self: *Self, loc: Location) ?Location {
+            const l = loc;
+            const p = self.parent(l) orelse return null;
+            const dir = self.childDir(p, l);
             switch (dir) {
                 .left => {
-                    const right = parent.child(.right) orelse return parent;
-                    return goLeftRight(right);
+                    const right = self.child(p, .right) orelse return p;
+                    return self.goLeftRight(right);
                 },
-                .right => return parent,
+                .right => return p,
                 else => unreachable,
             }
         }
 
-        fn advance(loc: Location, count: isize) Location {
+        fn advance(self: *Self, loc: Location, count: isize) Location {
             var res = loc;
             var c = count;
             while (c > 0) {
-                res = nextInOrderLocation(res) orelse return res;
+                res = self.nextInOrderLocation(res) orelse return res;
                 c -= 1;
             }
             while (c < 0) {
-                res = prevInOrderLocation(res) orelse return res;
+                res = self.prevInOrderLocation(res) orelse return res;
                 c += 1;
             }
             return res;
         }
 
-        fn reparent(parent: ?Location, dir: direction, child: ?Location) void {
-            if (parent) |p| {
-                setChildAt(p, dir, child);
+        fn reparent(self: *Self, p: ?Location, dir: direction, child_loc: ?Location) void {
+            if (p) |parent_loc| {
+                self.setChildAt(parent_loc, dir, child_loc);
             }
-            if (child) |c| {
+            if (child_loc) |c| {
                 var ch = c;
-                ch.setParent(parent);
+                self.setParent(&ch, p);
             }
         }
 
-        fn childAt(loc: Location, dir: direction) ?Location {
+        fn childAt(self: *Self, loc: Location, dir: direction) ?Location {
             switch (dir) {
-                .left => return loc.child(.left),
-                .right => return loc.child(.right),
+                .left => return self.child(loc, .left),
+                .right => return self.child(loc, .right),
                 else => unreachable,
             }
         }
 
-        fn setChildAt(parent: Location, dir: direction, child: ?Location) void {
-            var p = parent;
+        fn setChildAt(self: *Self, parent_loc: Location, dir: direction, child_loc: ?Location) void {
+            var p = parent_loc;
             switch (dir) {
-                .left => p.setChild(.left, child),
-                .right => p.setChild(.right, child),
+                .left => self.setChild(&p, .left, child_loc),
+                .right => self.setChild(&p, .right, child_loc),
                 else => unreachable,
             }
         }
 
-        fn childDir(loc: Location, other: Location) direction {
-            if (loc.child(.left)) |left| {
-                if (left.eq(other)) {
+        fn childDir(self: *Self, loc: Location, other: Location) direction {
+            if (self.child(loc, .left)) |left| {
+                if (self.locEq(left, other)) {
                     return .left;
                 }
             }
-            if (loc.child(.right)) |right| {
-                if (right.eq(other)) {
+            if (self.child(loc, .right)) |right| {
+                if (self.locEq(right, other)) {
                     return .right;
                 }
             }
             return .center;
         }
 
-        fn recalcCounts(loc: Location) void {
+        fn recalcCounts(self: *Self, loc: Location) void {
             var count: u32 = 0;
-            if (loc.child(.left)) |left| {
-                count += 1 + left.data().tags.childrenCount;
+            if (self.child(loc, .left)) |left| {
+                count += 1 + self.data(left).tags.childrenCount;
             }
-            if (loc.child(.right)) |right| {
-                count += 1 + right.data().tags.childrenCount;
+            if (self.child(loc, .right)) |right| {
+                count += 1 + self.data(right).tags.childrenCount;
             }
-            loc.data().tags.childrenCount = count;
+            self.data(loc).tags.childrenCount = count;
         }
 
-        fn updateCounts(loc: Location) void {
+        fn updateCounts(self: *Self, loc: Location) void {
             var mutLoc: ?Location = loc;
             while (mutLoc) |*l| {
-                recalcCounts(l.*);
-                mutLoc = l.parent();
+                self.recalcCounts(l.*);
+                mutLoc = self.parent(l.*);
             }
         }
 
-        fn leftCount(loc: Location) usize {
-            if (loc.child(.left)) |left| {
-                return 1 + left.data().tags.childrenCount;
+        fn leftCount(self: *Self, loc: Location) usize {
+            if (self.child(loc, .left)) |left| {
+                return 1 + self.data(left).tags.childrenCount;
             }
             return 0;
         }
 
-        fn recalcHeight(loc: Location) bool {
+        fn recalcHeight(self: *Self, loc: Location) bool {
             var h: u8 = 0;
-            if (loc.child(.left)) |l| {
-                h = 1 + l.data().h;
+            if (self.child(loc, .left)) |l| {
+                h = 1 + self.data(l).h;
             }
-            if (loc.child(.right)) |r| {
-                h = @max(h, 1 + r.data().h);
+            if (self.child(loc, .right)) |r| {
+                h = @max(h, 1 + self.data(r).h);
             }
-            return loc.data().setHeight(h);
+            return self.data(loc).setHeight(h);
         }
 
-        fn balance(loc: Location) i8 {
+        fn balance(self: *Self, loc: Location) i8 {
             var b: i8 = 0;
-            if (loc.child(.right)) |right| {
-                b += 1 + @as(i8, @intCast(right.data().h));
+            if (self.child(loc, .right)) |right| {
+                b += 1 + @as(i8, @intCast(self.data(right).h));
             }
-            if (loc.child(.left)) |left| {
-                b -= 1 + @as(i8, @intCast(left.data().h));
+            if (self.child(loc, .left)) |left| {
+                b -= 1 + @as(i8, @intCast(self.data(left).h));
             }
             return b;
         }
 
         // Iterator traverses the tree.
-        // An iterator is valid only for the tree that created it. If the node
-        // pointed to by the iterator is deleted, that iterator becomes invalid;
-        // use the iterator returned by deleteIterator instead.
         pub const Iterator = struct {
             tree: *Self,
             loc: ?Location,
@@ -414,27 +300,24 @@ pub fn TreeWithOptions(comptime K: type, comptime V: type, comptime Cmp: fn (a: 
                 };
             }
 
-            // next advances the iterator to the next larger key.
             pub fn next(self: *Iterator) void {
                 if (self.loc) |l| {
-                    self.loc = nextInOrderLocation(l);
+                    self.loc = self.tree.nextInOrderLocation(l);
                 }
             }
 
-            // prev advances the iterator to the next smaller key.
             pub fn prev(self: *Iterator) void {
                 if (self.loc) |l| {
-                    self.loc = prevInOrderLocation(l);
+                    self.loc = self.tree.prevInOrderLocation(l);
                 }
             }
 
-            // value returns the element currently pointed to by the iterator.
-            // It returns null when the iterator is past either end of the tree.
             pub fn value(self: *const Iterator) ?Entry {
                 if (self.loc) |l| {
+                    const data_ptr = self.tree.data(l);
                     return Entry{
-                        .Key = l.data().k,
-                        .Value = &l.data().v,
+                        .Key = data_ptr.k,
+                        .Value = &data_ptr.v,
                     };
                 }
                 return null;
@@ -448,15 +331,15 @@ pub fn TreeWithOptions(comptime K: type, comptime V: type, comptime Cmp: fn (a: 
         min: ?Location,
         max: ?Location,
 
-        // init initializes an empty tree using the given allocator.
-        pub fn init(a: std.mem.Allocator) Self {
+        // init initializes the tree.
+        pub fn init(a: std.mem.Allocator) !Self {
             return Self.initWithOptions(a, .{});
         }
 
-        // initWithOptions initializes an empty tree with runtime options.
-        pub fn initWithOptions(a: std.mem.Allocator, io: InitOptions) Self {
+        // initWithOptions initializes the tree.
+        pub fn initWithOptions(a: std.mem.Allocator, io: InitOptions) !Self {
             return Self{
-                .lc = Cache.init(a),
+                .lc = try Cache.init(a),
                 .length = 0,
                 .root = null,
                 .min = null,
@@ -466,32 +349,32 @@ pub fn TreeWithOptions(comptime K: type, comptime V: type, comptime Cmp: fn (a: 
         }
 
         // deinit releases the memory taken by all the nodes.
-        // It does not destroy or deinitialize stored keys or values.
         // Time complexity:
         //  O(1) - if fast deinit is enabled (see InitOptions.allowFastDeinit).
         //  O(n) - otherwise.
         pub fn deinit(self: *Self) void {
+            defer self.lc.deinit();
             if (self.io.allowFastDeinit == .always or self.io.allowFastDeinit == .auto and self.lc.fastDeinitAllowed()) {
                 return;
             }
             const min = self.min orelse return;
-            var loc = goLeftRight(min);
+            var loc = self.goLeftRight(min);
             while (true) {
                 const l = loc orelse break;
-                const next = nextPostOrderLocation(l);
+                const next = self.nextPostOrderLocation(l);
                 self.lc.destroy(l);
                 loc = next;
             }
         }
 
-        // len returns the number of elements currently stored in the tree.
+        // len returns the number of elements.
         pub fn len(self: *const Self) usize {
             return self.length;
         }
 
         fn createNewNode(self: *Self, k: ?K, v: ?V) !Location {
-            var new_loc = try self.lc.create();
-            const data_ptr = new_loc.data();
+            const new_loc = try self.lc.create();
+            const data_ptr = self.data(new_loc);
             data_ptr.*.tags = .{};
             if (k) |kVal| {
                 data_ptr.*.k = kVal;
@@ -502,17 +385,17 @@ pub fn TreeWithOptions(comptime K: type, comptime V: type, comptime Cmp: fn (a: 
             return new_loc;
         }
 
-        // InsertResult is returned from functions that may insert data.
-        // inserted is true when a new node was added.
-        // v points to the stored value, either existing before the call or newly added.
+        // InsertResult is returned from any function that inserts data to the tree.
+        //  inserted == true if a new node was added to the tree.
+        //  v - a pointer to the data, existing before the call, or the newly added.
         pub const InsertResult = struct {
             inserted: bool,
             v: *V,
         };
 
-        // getOrEmplace inserts a new key-value pair into the tree.
-        // If the key is already present, the existing value is returned.
-        // Otherwise, ctor initializes the newly created value in place.
+        // getOrEmplace inserts a new kv pair into the tree.
+        //  - if tree already contains 'k', the function returns InsertResult{.inserted = false, .v = ptr_to_existing_value}
+        //  - otherwise calls ctor with given args to initialise a newly created value.
         // Time complexity: O(logn).
         pub fn getOrEmplace(self: *Self, k: K, ctor: fn (v: *V, args: anytype) void, args: anytype) !InsertResult {
             const res = self.locate(k);
@@ -520,28 +403,27 @@ pub fn TreeWithOptions(comptime K: type, comptime V: type, comptime Cmp: fn (a: 
                 if (res.dir == .center) {
                     return InsertResult{
                         .inserted = false,
-                        .v = &l.data().v,
+                        .v = &self.data(l).v,
                     };
                 }
             }
-            var new_loc = try self.createNewNode(k, null);
-            ctor(&new_loc.data().*.v, args);
+            const new_loc = try self.createNewNode(k, null);
+            ctor(&self.data(new_loc).v, args);
             self.insertNew(res, new_loc);
             return InsertResult{
                 .inserted = true,
-                .v = &new_loc.data().v,
+                .v = &self.data(new_loc).v,
             };
         }
 
-        // getOrInsert inserts a new key-value pair if the key is not present.
-        // If the key already exists, the stored value is left unchanged.
+        // getOrInsert inserts a new kv pair into the tree if tke key is not present.
         // Time complexity: O(logn).
         pub fn getOrInsert(self: *Self, k: K, v: V) !InsertResult {
             return self.doInsert(k, v, false);
         }
 
-        // insert inserts or replaces a key-value pair.
-        // If the key is already present, its value is updated.
+        // insert inserts a node into the tree.
+        // If the key `k` was present in the tree, node's value is updated to `v`.
         // Time complexity: O(logn).
         pub fn insert(self: *Self, k: K, v: V) !InsertResult {
             return self.doInsert(k, v, true);
@@ -552,19 +434,19 @@ pub fn TreeWithOptions(comptime K: type, comptime V: type, comptime Cmp: fn (a: 
             if (res.loc) |l| {
                 if (res.dir == .center) {
                     if (updateExisting) {
-                        l.data().v = v;
+                        self.data(l).v = v;
                     }
                     return InsertResult{
                         .inserted = false,
-                        .v = &l.data().v,
+                        .v = &self.data(l).v,
                     };
                 }
             }
-            var new_loc = try self.createNewNode(k, v);
+            const new_loc = try self.createNewNode(k, v);
             self.insertNew(res, new_loc);
             return InsertResult{
                 .inserted = true,
-                .v = &new_loc.data().v,
+                .v = &self.data(new_loc).v,
             };
         }
 
@@ -572,21 +454,21 @@ pub fn TreeWithOptions(comptime K: type, comptime V: type, comptime Cmp: fn (a: 
             self.length += 1;
             switch (where.dir) {
                 .left, .right => {
-                    var l = where.loc orelse unreachable;
-                    reparent(l, where.dir, new_loc);
-                    if (where.dir == .left and l.eq(self.min.?)) {
+                    const l = where.loc orelse unreachable;
+                    self.reparent(l, where.dir, new_loc);
+                    if (where.dir == .left and self.locEq(l, self.min.?)) {
                         self.min = new_loc;
-                    } else if (where.dir == .right and l.eq(self.max.?)) {
+                    } else if (where.dir == .right and self.locEq(l, self.max.?)) {
                         self.max = new_loc;
                     }
-                    if (recalcHeight(l)) {
+                    if (self.recalcHeight(l)) {
                         if (options.countChildren) {
-                            recalcCounts(l);
+                            self.recalcCounts(l);
                         }
-                        self.checkBalance(l.parent(), false);
+                        self.checkBalance(self.parent(l), false);
                     } else {
                         if (options.countChildren) {
-                            updateCounts(l);
+                            self.updateCounts(l);
                         }
                     }
                 },
@@ -603,61 +485,61 @@ pub fn TreeWithOptions(comptime K: type, comptime V: type, comptime Cmp: fn (a: 
             self.lc.destroy(loc);
         }
 
-        // delete removes a key from the tree.
-        // It returns the removed value if the key was present.
+        // delete deletes a node from the tree.
+        // Returns the value associated with k, if the node was present in the tree.
         // Time complexity: O(logn).
         pub fn delete(self: *Self, k: K) ?V {
             const res = self.locate(k);
             if (res.dir != .center) {
                 return null;
             }
-            var l = res.loc orelse return null;
-            const v = l.data().v;
+            const l = res.loc orelse return null;
+            const v = self.data(l).v;
             self.deleteLocation(l);
             return v;
         }
 
         fn deleteAndReplace(self: *Self, loc: Location) void {
-            const replacement = findReplacement(loc);
+            const replacement = self.findReplacement(loc);
             if (self.min) |min| {
-                if (loc.eq(min)) {
-                    self.min = nextInOrderLocation(loc);
+                if (self.locEq(loc, min)) {
+                    self.min = self.nextInOrderLocation(loc);
                 }
             }
             if (self.max) |max| {
-                if (loc.eq(max)) {
-                    self.max = prevInOrderLocation(loc);
+                if (self.locEq(loc, max)) {
+                    self.max = self.prevInOrderLocation(loc);
                 }
             }
-            const parent = loc.parent();
+            const parent_loc = self.parent(loc);
             self.length -= 1;
             if (replacement) |rep| {
-                var replacement_parent = rep.parent().?;
-                var replacement_dir = childDir(replacement_parent, rep);
+                const replacement_parent = self.parent(rep).?;
+                const replacement_dir = self.childDir(replacement_parent, rep);
                 const inverted = replacement_dir.invert();
-                if (replacement_parent.eq(loc)) {
-                    if (parent) |p| {
-                        reparent(p, childDir(p, loc), rep);
+                if (self.locEq(replacement_parent, loc)) {
+                    if (parent_loc) |p| {
+                        self.reparent(p, self.childDir(p, loc), rep);
                     } else {
                         self.setRoot(rep);
                     }
-                    reparent(rep, inverted, childAt(loc, inverted));
+                    self.reparent(rep, inverted, self.childAt(loc, inverted));
                     self.checkBalance(rep, true);
                     return;
                 }
-                const replacement_child = childAt(rep, inverted);
-                reparent(replacement_parent, replacement_dir, replacement_child);
-                if (parent) |p| {
-                    reparent(p, childDir(p, loc), rep);
+                const replacement_child = self.childAt(rep, inverted);
+                self.reparent(replacement_parent, replacement_dir, replacement_child);
+                if (parent_loc) |p| {
+                    self.reparent(p, self.childDir(p, loc), rep);
                 } else {
                     self.setRoot(rep);
                 }
-                reparent(rep, .left, loc.child(.left));
-                reparent(rep, .right, loc.child(.right));
+                self.reparent(rep, .left, self.child(loc, .left));
+                self.reparent(rep, .right, self.child(loc, .right));
                 self.checkBalance(replacement_parent, true);
             } else {
-                if (parent) |p| {
-                    reparent(p, childDir(p, loc), replacement);
+                if (parent_loc) |p| {
+                    self.reparent(p, self.childDir(p, loc), replacement);
                     self.checkBalance(p, false);
                 } else {
                     self.setRoot(null);
@@ -665,51 +547,50 @@ pub fn TreeWithOptions(comptime K: type, comptime V: type, comptime Cmp: fn (a: 
             }
         }
 
-        fn findReplacement(loc: Location) ?Location {
-            const left = loc.child(.left);
-            const right = loc.child(.right);
+        fn findReplacement(self: *Self, loc: Location) ?Location {
+            const left = self.child(loc, .left);
+            const right = self.child(loc, .right);
             if (left) |l| {
                 if (right) |r| {
                     // Russell A. Brown, Optimized Deletion From an AVL Tree.
                     // https://arxiv.org/pdf/2406.05162v5
-                    if (balance(loc) <= 0) {
-                        return goRight(l);
+                    if (self.balance(loc) <= 0) {
+                        return self.goRight(l);
                     }
-                    return goLeft(r);
+                    return self.goLeft(r);
                 }
                 return left;
             }
             return right;
         }
 
-        // getMin returns an Entry for the smallest key.
-        // It returns null when the tree is empty.
+        // getMin returns the minimum element of the tree.
         // Time complexity: O(1).
         pub fn getMin(self: *Self) ?Entry {
             if (self.min) |min| {
+                const data_ptr = self.data(min);
                 return Entry{
-                    .Key = min.data().k,
-                    .Value = &min.data().v,
+                    .Key = data_ptr.k,
+                    .Value = &data_ptr.v,
                 };
             }
             return null;
         }
 
-        // getMax returns an Entry for the largest key.
-        // It returns null when the tree is empty.
+        // getMax returns the maximum element of the tree.
         // Time complexity: O(1).
         pub fn getMax(self: *Self) ?Entry {
             if (self.max) |max| {
+                const data_ptr = self.data(max);
                 return Entry{
-                    .Key = max.data().k,
-                    .Value = &max.data().v,
+                    .Key = data_ptr.k,
+                    .Value = &data_ptr.v,
                 };
             }
             return null;
         }
 
-        // ascendFromStart returns an iterator pointing to the smallest key.
-        // For an empty tree, the returned iterator has no value.
+        // ascendFromStart returns an iterator pointing to the first element.
         // Time complexity: O(1).
         pub fn ascendFromStart(self: *Self) Iterator {
             return Iterator{
@@ -718,8 +599,7 @@ pub fn TreeWithOptions(comptime K: type, comptime V: type, comptime Cmp: fn (a: 
             };
         }
 
-        // descendFromEnd returns an iterator pointing to the largest key.
-        // For an empty tree, the returned iterator has no value.
+        // descendFromEnd returns an iterator pointing to the last element.
         // Time complexity: O(1).
         pub fn descendFromEnd(self: *Self) Iterator {
             return Iterator{
@@ -728,13 +608,12 @@ pub fn TreeWithOptions(comptime K: type, comptime V: type, comptime Cmp: fn (a: 
             };
         }
 
-        // deleteIterator deletes the element pointed to by the iterator and
-        // returns an iterator to the next larger key.
-        // The given iterator must belong to this tree.
+        // deleteIterator deletes an iterator from the tree and returns
+        // an iterator to the next element.
         pub fn deleteIterator(self: *Self, it: Iterator) Iterator {
             std.debug.assert(it.tree == self);
             const loc = it.loc orelse return it;
-            const next = nextInOrderLocation(loc);
+            const next = self.nextInOrderLocation(loc);
             self.deleteLocation(loc);
             return Iterator{
                 .loc = next,
@@ -742,34 +621,34 @@ pub fn TreeWithOptions(comptime K: type, comptime V: type, comptime Cmp: fn (a: 
             };
         }
 
-        // get returns a pointer to the value for the given key.
-        // It returns null when the key is not present.
+        // get returns a value for key k.
         // Time complexity: O(logn).
         pub fn get(self: *Self, k: K) ?*V {
             const res = self.locate(k);
             if (res.dir == .center) {
                 if (res.loc) |loc| {
-                    return &loc.data().v;
+                    return &self.data(loc).v;
                 }
             }
             return null;
         }
 
-        // at returns an Entry at the given sorted position.
-        // Panics if position >= len().
+        // at returns a an entry at the ith position of the sorted array.
+        // Panics if position >= tree.Len().
         // Time complexity:
         //  O(logn) - if children node counts are enabled.
         //  O(n) - otherwise.
         pub fn at(self: *Self, pos: usize) Entry {
-            var loc = self.locateAt(pos);
+            const loc = self.locateAt(pos);
+            const data_ptr = self.data(loc);
             return Entry{
-                .Key = loc.data().k,
-                .Value = &loc.data().v,
+                .Key = data_ptr.k,
+                .Value = &data_ptr.v,
             };
         }
 
-        // ascendAt returns an iterator pointing to the given sorted position.
-        // Panics if position >= len().
+        // ascendAt returns an iterator pointing to the ith element.
+        // Panics if position >= tree.Len().
         // Time complexity:
         //  O(logn) - if children node counts are enabled.
         //  O(n) - otherwise.
@@ -781,17 +660,23 @@ pub fn TreeWithOptions(comptime K: type, comptime V: type, comptime Cmp: fn (a: 
             };
         }
 
-        // deleteAt deletes the node at the given sorted position.
-        // It returns an owned copy of the removed key and value.
-        // Panics if position >= len().
+        // KV is a key-value pair.
+        pub const KV = struct {
+            Key: K,
+            Value: V,
+        };
+
+        // deleteAt deletes a node at the given position.
+        // Panics if position >= tree.Len().
         // Time complexity:
         //  O(logn) - if children node counts are enabled.
         //  O(n) - otherwise.
         pub fn deleteAt(self: *Self, pos: usize) KV {
-            var loc = self.locateAt(pos);
+            const loc = self.locateAt(pos);
+            const data_ptr = self.data(loc);
             const kv = KV{
-                .Key = loc.data().k,
-                .Value = loc.data().v,
+                .Key = data_ptr.k,
+                .Value = data_ptr.v,
             };
             self.deleteLocation(loc);
             return kv;
@@ -800,13 +685,13 @@ pub fn TreeWithOptions(comptime K: type, comptime V: type, comptime Cmp: fn (a: 
         fn setRoot(self: *Self, loc: ?Location) void {
             self.root = loc;
             if (self.root) |*root| {
-                root.setParent(null);
+                self.setParent(root, null);
             }
         }
 
-        fn treeRotated(self: *Self, parent: ?Location, oldRoot: Location, newRoot: Location) void {
-            if (parent) |p| {
-                reparent(p, childDir(p, oldRoot), newRoot);
+        fn treeRotated(self: *Self, parent_loc: ?Location, oldRoot: Location, newRoot: Location) void {
+            if (parent_loc) |p| {
+                self.reparent(p, self.childDir(p, oldRoot), newRoot);
             } else {
                 self.setRoot(newRoot);
             }
@@ -816,138 +701,138 @@ pub fn TreeWithOptions(comptime K: type, comptime V: type, comptime Cmp: fn (a: 
             var mutLoc = loc;
             while (mutLoc) |*mlPtr| {
                 const l = mlPtr.*;
-                const parent = l.parent();
-                switch (balance(l)) {
+                const parent_loc = self.parent(l);
+                switch (self.balance(l)) {
                     -2 => {
                         const subRoot = blk: {
-                            switch (balance(l.child(.left).?)) {
+                            switch (self.balance(self.child(l, .left).?)) {
                                 -1, 0 => {
-                                    break :blk rr(l);
+                                    break :blk self.rr(l);
                                 },
                                 1 => {
-                                    break :blk lr(l);
+                                    break :blk self.lr(l);
                                 },
                                 else => unreachable,
                             }
                         };
-                        self.treeRotated(parent, l, subRoot);
+                        self.treeRotated(parent_loc, l, subRoot);
                     },
                     2 => {
                         const subRoot = blk: {
-                            switch (balance(l.child(.right).?)) {
+                            switch (self.balance(self.child(l, .right).?)) {
                                 -1 => {
-                                    break :blk rl(l);
+                                    break :blk self.rl(l);
                                 },
                                 0, 1 => {
-                                    break :blk ll(l);
+                                    break :blk self.ll(l);
                                 },
                                 else => unreachable,
                             }
                         };
-                        self.treeRotated(parent, l, subRoot);
+                        self.treeRotated(parent_loc, l, subRoot);
                     },
                     else => {
-                        if (!recalcHeight(l) and !all_way_up) {
+                        if (!self.recalcHeight(l) and !all_way_up) {
                             if (options.countChildren) {
-                                updateCounts(l);
+                                self.updateCounts(l);
                             }
                             return;
                         }
                         if (options.countChildren) {
-                            recalcCounts(l);
+                            self.recalcCounts(l);
                         }
                     },
                 }
-                mutLoc = parent;
+                mutLoc = parent_loc;
             }
         }
 
-        fn rr(loc: Location) Location {
-            var l = loc;
-            var left = l.child(.left).?;
-            const left_right = left.child(.right);
+        fn rr(self: *Self, loc: Location) Location {
+            const l = loc;
+            const left = self.child(l, .left).?;
+            const left_right = self.child(left, .right);
 
-            reparent(l, .left, left_right);
-            reparent(left, .right, l);
+            self.reparent(l, .left, left_right);
+            self.reparent(left, .right, l);
 
-            _ = recalcHeight(l);
-            _ = recalcHeight(left);
+            _ = self.recalcHeight(l);
+            _ = self.recalcHeight(left);
 
             if (options.countChildren) {
-                recalcCounts(l);
-                recalcCounts(left);
+                self.recalcCounts(l);
+                self.recalcCounts(left);
             }
 
             return left;
         }
 
-        fn lr(loc: Location) Location {
-            var l = loc;
-            var left = l.child(.left).?;
-            var left_right = left.child(.right).?;
-            const left_right_right = left_right.child(.right);
-            const left_right_left = left_right.child(.left);
+        fn lr(self: *Self, loc: Location) Location {
+            const l = loc;
+            const left = self.child(l, .left).?;
+            const left_right = self.child(left, .right).?;
+            const left_right_right = self.child(left_right, .right);
+            const left_right_left = self.child(left_right, .left);
 
-            reparent(left_right, .right, l);
-            reparent(left_right, .left, left);
+            self.reparent(left_right, .right, l);
+            self.reparent(left_right, .left, left);
 
-            reparent(l, .left, left_right_right);
-            reparent(left, .right, left_right_left);
+            self.reparent(l, .left, left_right_right);
+            self.reparent(left, .right, left_right_left);
 
-            _ = recalcHeight(l);
-            _ = recalcHeight(left);
-            _ = recalcHeight(left_right);
+            _ = self.recalcHeight(l);
+            _ = self.recalcHeight(left);
+            _ = self.recalcHeight(left_right);
 
             if (options.countChildren) {
-                recalcCounts(l);
-                recalcCounts(left);
-                recalcCounts(left_right);
+                self.recalcCounts(l);
+                self.recalcCounts(left);
+                self.recalcCounts(left_right);
             }
 
             return left_right;
         }
 
-        fn rl(loc: Location) Location {
-            var l = loc;
-            var right = l.child(.right).?;
-            var right_left = right.child(.left).?;
+        fn rl(self: *Self, loc: Location) Location {
+            const l = loc;
+            const right = self.child(l, .right).?;
+            const right_left = self.child(right, .left).?;
 
-            const right_left_left = right_left.child(.left);
-            const right_left_right = right_left.child(.right);
+            const right_left_left = self.child(right_left, .left);
+            const right_left_right = self.child(right_left, .right);
 
-            reparent(right_left, .left, l);
-            reparent(right_left, .right, right);
+            self.reparent(right_left, .left, l);
+            self.reparent(right_left, .right, right);
 
-            reparent(l, .right, right_left_left);
-            reparent(right, .left, right_left_right);
+            self.reparent(l, .right, right_left_left);
+            self.reparent(right, .left, right_left_right);
 
-            _ = recalcHeight(l);
-            _ = recalcHeight(right);
-            _ = recalcHeight(right_left);
+            _ = self.recalcHeight(l);
+            _ = self.recalcHeight(right);
+            _ = self.recalcHeight(right_left);
 
             if (options.countChildren) {
-                recalcCounts(l);
-                recalcCounts(right);
-                recalcCounts(right_left);
+                self.recalcCounts(l);
+                self.recalcCounts(right);
+                self.recalcCounts(right_left);
             }
 
             return right_left;
         }
 
-        fn ll(loc: Location) Location {
-            var l = loc;
-            var right = l.child(.right).?;
-            const right_left = right.child(.left);
+        fn ll(self: *Self, loc: Location) Location {
+            const l = loc;
+            const right = self.child(l, .right).?;
+            const right_left = self.child(right, .left);
 
-            reparent(l, .right, right_left);
-            reparent(right, .left, l);
+            self.reparent(l, .right, right_left);
+            self.reparent(right, .left, l);
 
-            _ = recalcHeight(l);
-            _ = recalcHeight(right);
+            _ = self.recalcHeight(l);
+            _ = self.recalcHeight(right);
 
             if (options.countChildren) {
-                recalcCounts(l);
-                recalcCounts(right);
+                self.recalcCounts(l);
+                self.recalcCounts(right);
             }
 
             return right;
@@ -959,11 +844,11 @@ pub fn TreeWithOptions(comptime K: type, comptime V: type, comptime Cmp: fn (a: 
                 .dir = .center,
             };
             while (true) {
-                var l = result.loc orelse break;
+                const l = result.loc orelse break;
                 var next: ?Location = null;
-                switch (Comparer(k, l.data().k)) {
+                switch (Comparer(k, self.data(l).k)) {
                     .lt => {
-                        next = l.child(.left);
+                        next = self.child(l, .left);
                         result.dir = .left;
                     },
                     .eq => {
@@ -971,7 +856,7 @@ pub fn TreeWithOptions(comptime K: type, comptime V: type, comptime Cmp: fn (a: 
                         return result;
                     },
                     .gt => {
-                        next = l.child(.right);
+                        next = self.child(l, .right);
                         result.dir = .right;
                     },
                 }
@@ -994,22 +879,22 @@ pub fn TreeWithOptions(comptime K: type, comptime V: type, comptime Cmp: fn (a: 
             }
             if (!options.countChildren or self.shouldLocateAtLinearly(pos)) {
                 if (pos < self.length / 2) {
-                    return advance(self.min.?, @as(isize, @intCast(pos)));
+                    return self.advance(self.min.?, @as(isize, @intCast(pos)));
                 }
-                return advance(self.max.?, -@as(isize, @intCast(self.length - pos - 1)));
+                return self.advance(self.max.?, -@as(isize, @intCast(self.length - pos - 1)));
             }
             var loc = self.root.?;
             var p = pos;
             while (true) {
-                const left_count = leftCount(loc);
+                const left_count = self.leftCount(loc);
                 if (p == left_count) {
                     return loc;
                 }
                 if (p < left_count) {
-                    loc = loc.child(.left).?;
+                    loc = self.child(loc, .left).?;
                 } else {
                     p -= (left_count + 1);
-                    loc = loc.child(.right).?;
+                    loc = self.child(loc, .right).?;
                 }
             }
         }
@@ -1023,7 +908,7 @@ fn i64Cmp(a: i64, b: i64) math.Order {
 test "empty tree" {
     const a = std.testing.allocator;
     const TreeType = TreeWithOptions(i64, i64, i64Cmp, .{ .countChildren = true });
-    var t = TreeType.init(a);
+    var t = try TreeType.init(a);
     defer t.deinit();
 
     var it = t.ascendFromStart();
@@ -1035,7 +920,7 @@ test "empty tree" {
 test "tree getOrInsert" {
     const a = std.testing.allocator;
     const TreeType = Tree(i64, i64, i64Cmp);
-    var t = TreeType.init(a);
+    var t = try TreeType.init(a);
     defer t.deinit();
     var ir = t.insert(1, 1) catch unreachable;
     try std.testing.expectEqual(true, ir.inserted);
@@ -1055,7 +940,7 @@ test "tree getOrInsert" {
 test "tree getOrEmplace" {
     const a = std.testing.allocator;
     const TreeType = Tree(i64, i64, i64Cmp);
-    var t = TreeType.init(a);
+    var t = try TreeType.init(a);
     defer t.deinit();
     var i: i64 = 0;
     const ctor = struct {
@@ -1067,10 +952,7 @@ test "tree getOrEmplace" {
         const ir = try t.getOrEmplace(i, ctor, i);
         try std.testing.expect(ir.inserted);
         try std.testing.expectEqual(i, ir.v.*);
-        try checkHeightAndBalance(
-            TreeType,
-            t.root,
-        );
+        try checkHeightAndBalance(&t);
         i += 1;
     }
 
@@ -1094,7 +976,7 @@ test "tree getOrEmplace" {
 test "tree insert" {
     const a = std.testing.allocator;
     const TreeType = Tree(i64, i64, i64Cmp);
-    var t = TreeType.init(a);
+    var t = try TreeType.init(a);
     defer t.deinit();
     var i: i64 = 0;
     while (i < 128) {
@@ -1113,10 +995,7 @@ test "tree insert" {
         try std.testing.expectEqual(i, max.?.Key);
         try std.testing.expectEqual(i, max.?.Value.*);
 
-        try checkHeightAndBalance(
-            TreeType,
-            t.root,
-        );
+        try checkHeightAndBalance(&t);
 
         i += 1;
     }
@@ -1134,10 +1013,7 @@ test "tree insert" {
         const ir = try t.insert(i, i * 2);
         try std.testing.expect(!ir.inserted);
         try std.testing.expectEqual(i * 2, ir.v.*);
-        try checkHeightAndBalance(
-            TreeType,
-            t.root,
-        );
+        try checkHeightAndBalance(&t);
         i -= 1;
     }
 
@@ -1153,7 +1029,7 @@ test "tree insert" {
 test "tree delete" {
     const a = std.testing.allocator;
     const TreeType = TreeWithOptions(i64, i64, i64Cmp, .{ .countChildren = true });
-    var t = TreeType.init(a);
+    var t = try TreeType.init(a);
     defer t.deinit();
     var exp_len: usize = 0;
     try std.testing.expectEqual(exp_len, t.len());
@@ -1161,7 +1037,7 @@ test "tree delete" {
     try std.testing.expect(ir.inserted);
     var exp: i64 = 0;
     try std.testing.expectEqual(exp, t.delete(0).?);
-    try checkHeightAndBalance(TreeType, t.root);
+    try checkHeightAndBalance(&t);
 
     ir = try t.insert(0, 0);
     try std.testing.expect(ir.inserted);
@@ -1169,7 +1045,7 @@ test "tree delete" {
     try std.testing.expect(ir.inserted);
     exp_len = 2;
     try std.testing.expectEqual(exp_len, t.len());
-    try checkHeightAndBalance(TreeType, t.root);
+    try checkHeightAndBalance(&t);
     exp = 0;
     try std.testing.expectEqual(exp, t.delete(0).?);
     exp = -1;
@@ -1183,13 +1059,13 @@ test "tree delete" {
     try std.testing.expect(ir.inserted);
     exp_len = 2;
     try std.testing.expectEqual(exp_len, t.len());
-    try checkHeightAndBalance(TreeType, t.root);
+    try checkHeightAndBalance(&t);
     exp = 1;
     try std.testing.expectEqual(exp, t.delete(1).?);
     exp_len = 1;
     try std.testing.expectEqual(exp_len, t.len());
     try std.testing.expectEqual(@as(?i64, null), t.delete(-1));
-    try checkHeightAndBalance(TreeType, t.root);
+    try checkHeightAndBalance(&t);
     exp = 0;
     try std.testing.expectEqual(exp, t.delete(0).?);
     exp_len = 0;
@@ -1203,10 +1079,10 @@ test "tree delete" {
     try std.testing.expectEqual(exp, t.delete(0).?);
     exp_len = 1;
     try std.testing.expectEqual(exp_len, t.len());
-    try checkHeightAndBalance(TreeType, t.root);
+    try checkHeightAndBalance(&t);
     exp = 1;
     try std.testing.expectEqual(exp, t.delete(1).?);
-    try checkHeightAndBalance(TreeType, t.root);
+    try checkHeightAndBalance(&t);
     exp_len = 0;
     try std.testing.expectEqual(exp_len, t.len());
 
@@ -1220,7 +1096,7 @@ test "tree delete" {
     i = 128;
     while (i >= 0) {
         try std.testing.expectEqual(i, t.delete(i).?);
-        try checkHeightAndBalance(TreeType, t.root);
+        try checkHeightAndBalance(&t);
         i -= 1;
     }
 }
@@ -1228,7 +1104,7 @@ test "tree delete" {
 test "delete min" {
     const a = std.testing.allocator;
     const TreeType = TreeWithOptions(i64, i64, i64Cmp, .{ .countChildren = true });
-    var t = TreeType.init(a);
+    var t = try TreeType.init(a);
     defer t.deinit();
 
     var i: i64 = 0;
@@ -1252,7 +1128,7 @@ test "delete min" {
 test "delete max" {
     const a = std.testing.allocator;
     const TreeType = TreeWithOptions(i64, i64, i64Cmp, .{ .countChildren = true });
-    var t = TreeType.init(a);
+    var t = try TreeType.init(a);
     defer t.deinit();
 
     var i: i64 = 0;
@@ -1276,7 +1152,7 @@ test "delete max" {
 test "tree at_countChildren" {
     const a = std.testing.allocator;
     const TreeType = TreeWithOptions(i64, i64, i64Cmp, .{ .countChildren = true });
-    var t = TreeType.init(a);
+    var t = try TreeType.init(a);
     defer t.deinit();
 
     var i: i64 = 0;
@@ -1297,8 +1173,8 @@ test "tree at_countChildren" {
 
 test "tree at_nocountChildren" {
     const a = std.testing.allocator;
-    const TreeType = TreeWithOptions(i64, i64, i64Cmp, .{ .countChildren = false });
-    var t = TreeType.init(a);
+    const TreeType = TreeWithOptions(i64, i64, i64Cmp, .{ .countChildren = true });
+    var t = try TreeType.init(a);
     defer t.deinit();
 
     var i: i64 = 0;
@@ -1320,7 +1196,7 @@ test "tree at_nocountChildren" {
 test "tree deleteAt" {
     const a = std.testing.allocator;
     const TreeType = TreeWithOptions(i64, i64, i64Cmp, .{ .countChildren = true });
-    var t = TreeType.init(a);
+    var t = try TreeType.init(a);
     defer t.deinit();
 
     var i: i64 = 0;
@@ -1356,7 +1232,7 @@ test "tree deleteAt" {
 test "tree iterator" {
     const a = std.testing.allocator;
     const TreeType = TreeWithOptions(i64, i64, i64Cmp, .{ .countChildren = true });
-    var t = TreeType.init(a);
+    var t = try TreeType.init(a);
     defer t.deinit();
 
     var i: i64 = 0;
@@ -1419,7 +1295,7 @@ test "tree iterator" {
 test "tree ascendAt" {
     const a = std.testing.allocator;
     const TreeType = TreeWithOptions(i64, i64, i64Cmp, .{ .countChildren = true });
-    var t = TreeType.init(a);
+    var t = try TreeType.init(a);
     defer t.deinit();
 
     var i: i64 = 0;
@@ -1455,12 +1331,12 @@ test "tree ascendAt" {
     }
 }
 
-test "tree random" {
+fn testTreeRandom(comptime options: Options) !void {
     var a = std.testing.allocator;
-    const TreeType = TreeWithOptions(i64, i64, i64Cmp, .{ .countChildren = true });
-    var t = TreeType.init(a);
+    const TreeType = TreeWithOptions(i64, i64, i64Cmp, options);
+    var t = try TreeType.init(a);
     defer t.deinit();
-    var arr = try a.alloc(i64, 2048);
+    var arr = try a.alloc(i64, 1024);
     for (arr, 0..) |_, idx| {
         arr[idx] = @as(i64, @intCast(idx));
     }
@@ -1474,42 +1350,102 @@ test "tree random" {
             const ir = try t.insert(val, val);
             try std.testing.expect(ir.inserted);
             try std.testing.expectEqual(val, ir.v.*);
-            try checkHeightAndBalance(TreeType, t.root);
+            try checkHeightAndBalance(&t);
         }
         r.random().shuffle(i64, arr);
         for (arr) |val| {
             try std.testing.expectEqual(val, t.delete(val).?);
-            try checkHeightAndBalance(TreeType, t.root);
+            try checkHeightAndBalance(&t);
         }
         try std.testing.expectEqual(exp_len, t.len());
         i += 1;
     }
 }
 
-const failingFreeAllocator = struct {
-    ptr: *anyopaque,
-    vtable: std.mem.Allocator.VTable,
+test "tree random (pointer cache)" {
+    try testTreeRandom(.{ .countChildren = true, .nodeCacheType = .PointerBased });
+}
 
-    fn free(_: *anyopaque, _: []u8, _: std.mem.Alignment, _: usize) void {
-        @panic("should not happen");
-    }
+test "tree random (array cache)" {
+    try testTreeRandom(.{ .countChildren = true, .nodeCacheType = .ArrayBased });
+}
 
-    fn init(a: std.mem.Allocator) failingFreeAllocator {
-        return failingFreeAllocator{ .ptr = a.ptr, .vtable = .{
-            .alloc = a.vtable.alloc,
-            .free = free,
-            .remap = a.vtable.remap,
-            .resize = a.vtable.resize,
-        } };
-    }
+fn TestLocationCache(comptime underlying: type) type {
+    return struct {
+        const Self = @This();
+        pub const Location = underlying.Location;
 
-    fn allocator(self: *failingFreeAllocator) std.mem.Allocator {
-        return std.mem.Allocator{
-            .ptr = self.ptr,
-            .vtable = &self.vtable,
-        };
-    }
-};
+        u: underlying,
+
+        destroyHook: ?*const fn (loc: Location) void,
+
+        fn init(a: std.mem.Allocator) !Self {
+            return Self{
+                .u = try underlying.init(a),
+                .destroyHook = null,
+            };
+        }
+
+        fn deinit(_: *Self) void {}
+
+        fn create(self: *Self) !Location {
+            return self.u.create();
+        }
+
+        pub fn destroy(self: *Self, loc: Location) void {
+            if (self.destroyHook) |dt| {
+                dt(loc);
+            }
+            self.u.destroy(loc);
+        }
+
+        pub fn fastDeinitAllowed(self: *Self) bool {
+            return self.u.fastDeinitAllowed();
+        }
+
+        pub fn eq(self: *Self, lhs: Location, rhs: Location) bool {
+            return self.u.eq(lhs, rhs);
+        }
+
+        pub fn data(self: *Self, loc: Location) *Location.NodeData {
+            return self.u.data(loc);
+        }
+
+        pub fn child(self: *Self, loc: Location, comptime dir: direction) ?Location {
+            return self.u.child(loc, dir);
+        }
+
+        pub fn setChild(self: *Self, loc: *Location, comptime dir: direction, child_loc: ?Location) void {
+            self.u.setChild(loc, dir, child_loc);
+        }
+
+        pub fn parent(self: *Self, loc: Location) ?Location {
+            return self.u.parent(loc);
+        }
+
+        pub fn setParent(self: *Self, loc: *Location, p: ?Location) void {
+            self.u.setParent(loc, p);
+        }
+    };
+}
+
+fn testFastDeinit(
+    io: InitOptions,
+    a: std.mem.Allocator,
+) !void {
+    const cacheType = ptrLocationCache(i64, i64, struct {});
+    const TreeType = InitTreeType(i64, i64, TestLocationCache(cacheType), i64Cmp, .{});
+    var t = try TreeType.initWithOptions(a, io);
+    defer t.deinit();
+    t.lc.destroyHook = struct {
+        fn doPanic(_: cacheType.Location) void {
+            @panic("should not happen");
+        }
+    }.doPanic;
+    _ = try t.insert(0, 0);
+    _ = try t.insert(1, 1);
+    _ = try t.insert(2, 2);
+}
 
 test "arena allocator: auto fast deinit" {
     var arena = std.heap.ArenaAllocator.init(std.testing.allocator);
@@ -1524,23 +1460,13 @@ test "arena allocator: always fast deinit" {
 }
 
 test "fixed buffer allocator: auto fast deinit" {
-    var buff: [512]u8 = undefined;
+    var buff: [16 * 1024]u8 = undefined;
     var fb = std.heap.FixedBufferAllocator.init(&buff);
     try testFastDeinit(.{ .allowFastDeinit = .auto }, fb.allocator());
 }
 
-fn testFastDeinit(io: InitOptions, a: std.mem.Allocator) !void {
-    const TreeType = TreeWithOptions(i64, i64, i64Cmp, .{});
-    var ta: failingFreeAllocator = failingFreeAllocator.init(a);
-    var t = TreeType.initWithOptions(ta.allocator(), io);
-    defer t.deinit();
-    _ = try t.insert(0, 0);
-    _ = try t.insert(1, 1);
-    _ = try t.insert(2, 2);
-}
-
-fn checkHeightAndBalance(comptime T: type, loc: ?T.Location) !void {
-    _ = try recalcHeightAndBalance(T, loc);
+fn checkHeightAndBalance(tree: anytype) !void {
+    _ = try recalcHeightAndBalance(@TypeOf(tree.*), tree, tree.root);
 }
 
 const recalcResult = struct {
@@ -1557,24 +1483,21 @@ const recalcResult = struct {
     }
 };
 
-fn recalcHeightAndBalance(comptime T: type, loc: ?T.Location) !recalcResult {
+fn recalcHeightAndBalance(comptime T: type, tree: *T, loc: ?T.Location) !recalcResult {
     var result = recalcResult.init();
-    var l = loc orelse return result;
-    if (l.child(.left) != null) {
-        const lRes = try recalcHeightAndBalance(T, l.child(.left));
+    const l = loc orelse return result;
+    if (tree.child(l, .left) != null) {
+        const lRes = try recalcHeightAndBalance(T, tree, tree.child(l, .left));
         result.height = 1 + lRes.height;
         result.l_count = lRes.l_count + lRes.r_count + 1;
     }
-    if (l.child(.right) != null) {
-        const rRes = try recalcHeightAndBalance(T, l.child(.right));
+    if (tree.child(l, .right) != null) {
+        const rRes = try recalcHeightAndBalance(T, tree, tree.child(l, .right));
         result.height = @max(result.height, 1 + rRes.height);
         result.r_count = rRes.r_count + rRes.l_count + 1;
     }
-    try std.testing.expectEqual(result.height, l.data().h);
-    if (T.TreeOptions.countChildren) {
-        try std.testing.expectEqual(result.l_count + result.r_count, l.data().tags.childrenCount);
-    }
-    if (T.balance(l) < -1 or T.balance(l) > 1) {
+    try std.testing.expectEqual(result.height, tree.data(l).h);
+    if (tree.balance(l) < -1 or tree.balance(l) > 1) {
         return error{
             InvalidBalance,
         }.InvalidBalance;
