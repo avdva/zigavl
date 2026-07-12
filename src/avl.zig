@@ -15,7 +15,6 @@ pub const Options = struct {
     // the number of children allows to locate a node by its position with a guaranteed complexity O(logn).
     countChildren: bool = false,
     nodeCacheType: NodeCacheType = .PointerBased,
-    debug: bool = false,
 };
 
 // InitOptions defines some runtime parameters of the tree instance.
@@ -45,25 +44,27 @@ pub fn Tree(comptime K: type, comptime V: type, comptime Cmp: fn (a: K, b: K) ma
 
 // TreeWithOptions acts like Tree func, but also accepts compile-known Options.
 pub fn TreeWithOptions(comptime K: type, comptime V: type, comptime Cmp: fn (a: K, b: K) math.Order, comptime options: Options) type {
+    const Tags = if (options.countChildren)
+        struct { childrenCount: u32 = 0 }
+    else
+        struct {};
+    const Cache = blk: {
+        const cacheType = switch (options.nodeCacheType) {
+            .ArrayBased => arrayLocationCache(K, V, Tags),
+            .PointerBased => ptrLocationCache(K, V, Tags),
+        };
+        break :blk cacheType;
+    };
+    return InitTreeType(K, V, Cache, Cmp, options);
+}
+
+fn InitTreeType(comptime K: type, comptime V: type, comptime Cache: type, comptime Cmp: fn (a: K, b: K) math.Order, comptime options: Options) type {
     return struct {
         const Self = @This();
-        const Tags = if (options.countChildren)
-            struct { childrenCount: u32 = 0 }
-        else
-            struct {};
 
         const KeyType = K;
         const ValueType = V;
-        const Cache = blk: {
-            const cacheType = switch (options.nodeCacheType) {
-                .ArrayBased => arrayLocationCache(K, V, Tags),
-                .PointerBased => ptrLocationCache(K, V, Tags),
-            };
-            if (options.debug) {
-                break :blk TestLocationCache(cacheType);
-            }
-            break :blk cacheType;
-        };
+
         const Location = Cache.Location;
         const Comparer = Cmp;
         const TreeOptions = options;
@@ -1428,15 +1429,13 @@ fn TestLocationCache(comptime underlying: type) type {
     };
 }
 
-fn testFastDeinit(io: InitOptions, a: std.mem.Allocator, comptime nct: NodeCacheType) !void {
-    const TreeType = TreeWithOptions(i64, i64, i64Cmp, .{
-        .nodeCacheType = nct,
-        .debug = true,
-    });
+fn testFastDeinit(io: InitOptions, a: std.mem.Allocator,) !void {
+    const cacheType = ptrLocationCache(i64, i64, struct {});
+    const TreeType = InitTreeType(i64, i64, TestLocationCache(cacheType), i64Cmp, .{});
     var t = try TreeType.initWithOptions(a, io);
     defer t.deinit();
     t.lc.destroyHook = struct {
-        fn doPanic(_: TreeType.Cache.Location) void {
+        fn doPanic(_: cacheType.Location) void {
             @panic("should not happen");
         }
     }.doPanic;
@@ -1448,19 +1447,19 @@ fn testFastDeinit(io: InitOptions, a: std.mem.Allocator, comptime nct: NodeCache
 test "arena allocator: auto fast deinit" {
     var arena = std.heap.ArenaAllocator.init(std.testing.allocator);
     defer arena.deinit();
-    try testFastDeinit(.{ .allowFastDeinit = .auto }, arena.allocator(), .PointerBased);
+    try testFastDeinit(.{ .allowFastDeinit = .auto }, arena.allocator());
 }
 
 test "arena allocator: always fast deinit" {
     var arena = std.heap.ArenaAllocator.init(std.testing.allocator);
     defer arena.deinit();
-    try testFastDeinit(.{ .allowFastDeinit = .always }, arena.allocator(), .PointerBased);
+    try testFastDeinit(.{ .allowFastDeinit = .always }, arena.allocator());
 }
 
 test "fixed buffer allocator: auto fast deinit" {
     var buff: [16 * 1024]u8 = undefined;
     var fb = std.heap.FixedBufferAllocator.init(&buff);
-    try testFastDeinit(.{ .allowFastDeinit = .auto }, fb.allocator(), .PointerBased);
+    try testFastDeinit(.{ .allowFastDeinit = .auto }, fb.allocator());
 }
 
 fn checkHeightAndBalance(tree: anytype) !void {
