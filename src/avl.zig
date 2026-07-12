@@ -1429,7 +1429,10 @@ fn TestLocationCache(comptime underlying: type) type {
     };
 }
 
-fn testFastDeinit(io: InitOptions, a: std.mem.Allocator,) !void {
+fn testFastDeinit(
+    io: InitOptions,
+    a: std.mem.Allocator,
+) !void {
     const cacheType = ptrLocationCache(i64, i64, struct {});
     const TreeType = InitTreeType(i64, i64, TestLocationCache(cacheType), i64Cmp, .{});
     var t = try TreeType.initWithOptions(a, io);
