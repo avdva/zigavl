@@ -1,4 +1,6 @@
-pub fn MakeNodeDataType(comptime K: type, comptime V: type, comptime Tags: type) type {
+// MakeDataType returns a type that represents a data node of the tree.
+// It contains Key, Value, Height, and (possibly empty) Tags.
+pub fn MakeDataType(comptime K: type, comptime V: type, comptime Tags: type) type {
     return struct {
         const Self = @This();
         k: K = undefined,
@@ -6,31 +8,11 @@ pub fn MakeNodeDataType(comptime K: type, comptime V: type, comptime Tags: type)
         tags: Tags = undefined,
         h: u8 = 0,
 
+        // setHeight sets node's height, returning true, if it was different.
         pub fn setHeight(self: *Self, h: u8) bool {
             const old = self.h;
             self.h = h;
             return old != h;
-        }
-    };
-}
-
-pub fn MakeNodeType(comptime K: type, comptime V: type, comptime L: type, comptime Tags: type) type {
-    return struct {
-        const Self = @This();
-        pub const NodeData = MakeNodeDataType(K, V, Tags);
-
-        data: NodeData,
-        left: ?L,
-        right: ?L,
-        parent: ?L,
-
-        pub fn init() Self {
-            return Self{
-                .data = NodeData{},
-                .left = null,
-                .right = null,
-                .parent = null,
-            };
         }
     };
 }

@@ -1,6 +1,6 @@
 const std = @import("std");
 const direction = @import("direction.zig").direction;
-const makeNodeType = @import("node.zig").MakeNodeType;
+const node_lib = @import("node.zig");
 const utils = @import("utils.zig");
 
 pub fn LocationCache(comptime K: type, comptime V: type, comptime Tags: type) type {
@@ -15,8 +15,7 @@ pub fn LocationCache(comptime K: type, comptime V: type, comptime Tags: type) ty
         // access goes through LocationCache methods.
         pub const Location = struct {
             const Loc = @This();
-            const Node = makeNodeType(K, V, Loc, Tags);
-            pub const NodeData = Node.NodeData;
+            pub const NodeData = node_lib.MakeDataType(K, V, Tags);
 
             addr: Address,
 
@@ -27,11 +26,27 @@ pub fn LocationCache(comptime K: type, comptime V: type, comptime Tags: type) ty
             }
         };
 
+        const Node = struct {
+            data: Location.NodeData,
+            left: Address,
+            right: Address,
+            parent: Address,
+
+            fn init() Node {
+                return Node{
+                    .data = Location.NodeData{},
+                    .left = InvalidAddr,
+                    .right = InvalidAddr,
+                    .parent = InvalidAddr,
+                };
+            }
+        };
+
         // A slot is either occupied by a tree node or belongs to the free-list.
         // Free slots store the next free address directly, with InvalidAddr as
         // the end-of-list sentinel. No tagged state is stored separately.
         const Slot = union {
-            used: Location.Node,
+            used: Node,
             free: Address,
         };
 
@@ -59,12 +74,12 @@ pub fn LocationCache(comptime K: type, comptime V: type, comptime Tags: type) ty
                 const slot = &self.nodes.items[addr];
                 self.free_head = slot.free;
                 self.free_count -= 1;
-                slot.* = Slot{ .used = Location.Node.init() };
+                slot.* = Slot{ .used = Node.init() };
                 return Location.init(addr);
             }
 
             const addr: Address = @intCast(self.nodes.items.len);
-            try self.nodes.append(self.a, Slot{ .used = Location.Node.init() });
+            try self.nodes.append(self.a, Slot{ .used = Node.init() });
             return Location.init(addr);
         }
 
@@ -81,7 +96,7 @@ pub fn LocationCache(comptime K: type, comptime V: type, comptime Tags: type) ty
             return utils.fastDeinitAllowed(self.a);
         }
 
-        fn node(self: *Self, loc: Location) *Location.Node {
+        fn node(self: *Self, loc: Location) *Node {
             return &self.nodes.items[loc.addr].used;
         }
 
@@ -94,27 +109,30 @@ pub fn LocationCache(comptime K: type, comptime V: type, comptime Tags: type) ty
         }
 
         pub fn child(self: *Self, loc: Location, comptime dir: direction) ?Location {
-            switch (dir) {
-                .left => return self.node(loc).left,
-                .right => return self.node(loc).right,
+            const addr = switch (dir) {
+                .left => self.node(loc).left,
+                .right => self.node(loc).right,
                 else => unreachable,
-            }
+            };
+            return if (addr == InvalidAddr) null else Location.init(addr);
         }
 
         pub fn setChild(self: *Self, loc: *Location, comptime dir: direction, child_loc: ?Location) void {
+            const addr = if (child_loc) |child_loc_val| child_loc_val.addr else InvalidAddr;
             switch (dir) {
-                .left => self.node(loc.*).left = child_loc,
-                .right => self.node(loc.*).right = child_loc,
+                .left => self.node(loc.*).left = addr,
+                .right => self.node(loc.*).right = addr,
                 else => unreachable,
             }
         }
 
         pub fn parent(self: *Self, loc: Location) ?Location {
-            return self.node(loc).parent;
+            const addr = self.node(loc).parent;
+            return if (addr == InvalidAddr) null else Location.init(addr);
         }
 
         pub fn setParent(self: *Self, loc: *Location, p: ?Location) void {
-            self.node(loc.*).parent = p;
+            self.node(loc.*).parent = if (p) |parent_loc| parent_loc.addr else InvalidAddr;
         }
     };
 }
