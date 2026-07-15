@@ -1,6 +1,6 @@
 const std = @import("std");
 const direction = @import("direction.zig").direction;
-const makeNodeDataType = @import("node.zig").MakeNodeDataType;
+const node_lib = @import("node.zig");
 const utils = @import("utils.zig");
 
 pub fn LocationCache(comptime K: type, comptime V: type, comptime Tags: type) type {
@@ -15,7 +15,7 @@ pub fn LocationCache(comptime K: type, comptime V: type, comptime Tags: type) ty
         // access goes through LocationCache methods.
         pub const Location = struct {
             const Loc = @This();
-            pub const NodeData = makeNodeDataType(K, V, Tags);
+            pub const NodeData = node_lib.makeDataType(K, V, Tags);
 
             addr: Address,
 

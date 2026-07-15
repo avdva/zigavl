@@ -1,4 +1,4 @@
-pub fn MakeNodeDataType(comptime K: type, comptime V: type, comptime Tags: type) type {
+pub fn makeDataType(comptime K: type, comptime V: type, comptime Tags: type) type {
     return struct {
         const Self = @This();
         k: K = undefined,

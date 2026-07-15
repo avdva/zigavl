@@ -1,12 +1,12 @@
 const std = @import("std");
 const direction = @import("direction.zig").direction;
-const makeNodeDataType = @import("node.zig").MakeNodeDataType;
+const node_lib = @import("node.zig");
 const utils = @import("utils.zig");
 
 fn MakePtrLocationType(comptime K: type, comptime V: type, comptime Tags: type) type {
     return struct {
         const Self = @This();
-        pub const NodeData = makeNodeDataType(K, V, Tags);
+        pub const NodeData = node_lib.makeDataType(K, V, Tags);
 
         const Node = struct {
             data: NodeData,
