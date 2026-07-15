@@ -15,7 +15,7 @@ pub fn LocationCache(comptime K: type, comptime V: type, comptime Tags: type) ty
         // access goes through LocationCache methods.
         pub const Location = struct {
             const Loc = @This();
-            pub const NodeData = node_lib.makeDataType(K, V, Tags);
+            pub const NodeData = node_lib.MakeDataType(K, V, Tags);
 
             addr: Address,
 

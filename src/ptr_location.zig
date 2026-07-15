@@ -6,7 +6,7 @@ const utils = @import("utils.zig");
 fn MakePtrLocationType(comptime K: type, comptime V: type, comptime Tags: type) type {
     return struct {
         const Self = @This();
-        pub const NodeData = node_lib.makeDataType(K, V, Tags);
+        pub const NodeData = node_lib.MakeDataType(K, V, Tags);
 
         const Node = struct {
             data: NodeData,
