@@ -96,3 +96,20 @@ test "tree example usage" {
         @panic("invalid value");
     }
 }
+
+test "array based value pointers survive cache growth" {
+    const a = std.testing.allocator;
+    const TreeType = lib.TreeWithOptions(i64, i64, i64Cmp, .{ .nodeCacheType = .ArrayBased });
+    var t = try TreeType.init(a);
+    defer t.deinit();
+
+    const first = (try t.insert(0, 42)).v;
+    for (1..4096) |idx| {
+        const key: i64 = @intCast(idx);
+        _ = try t.insert(key, key);
+    }
+
+    try std.testing.expectEqual(@as(i64, 42), first.*);
+    first.* = 99;
+    try std.testing.expectEqual(@as(i64, 99), t.get(0).?.*);
+}

@@ -50,44 +50,66 @@ pub fn LocationCache(comptime K: type, comptime V: type, comptime Tags: type) ty
             free: Address,
         };
 
+        const chunk_bits = 10;
+        const chunk_len = 1 << chunk_bits;
+        const chunk_mask = chunk_len - 1;
+
+        const Chunk = struct {
+            slots: [chunk_len]Slot = undefined,
+        };
+
         a: std.mem.Allocator,
-        nodes: std.ArrayList(Slot),
+        chunks: std.ArrayList(*Chunk),
+        len: Address,
         free_head: Address,
         free_count: usize,
 
         pub fn init(a: std.mem.Allocator) !Self {
             return Self{
                 .a = a,
-                .nodes = try std.ArrayList(Slot).initCapacity(a, 16),
+                .chunks = try std.ArrayList(*Chunk).initCapacity(a, 1),
+                .len = 0,
                 .free_head = InvalidAddr,
                 .free_count = 0,
             };
         }
 
         pub fn deinit(self: *Self) void {
-            self.nodes.deinit(self.a);
+            for (self.chunks.items) |chunk| {
+                self.a.destroy(chunk);
+            }
+            self.chunks.deinit(self.a);
         }
 
         pub fn create(self: *Self) !Location {
             if (self.free_head != InvalidAddr) {
                 const addr = self.free_head;
-                const slot = &self.nodes.items[addr];
-                self.free_head = slot.free;
+                const free_slot = self.slot(addr);
+                self.free_head = free_slot.free;
                 self.free_count -= 1;
-                slot.* = Slot{ .used = Node.init() };
+                free_slot.* = Slot{ .used = Node.init() };
                 return Location.init(addr);
             }
 
-            const addr: Address = @intCast(self.nodes.items.len);
-            try self.nodes.append(self.a, Slot{ .used = Node.init() });
+            if (self.len == InvalidAddr) {
+                return error.OutOfMemory;
+            }
+            if (@as(usize, self.len) == self.chunks.items.len * chunk_len) {
+                const chunk = try self.a.create(Chunk);
+                try self.chunks.append(self.a, chunk);
+            }
+
+            const addr = self.len;
+            self.len += 1;
+            self.slot(addr).* = Slot{ .used = Node.init() };
             return Location.init(addr);
         }
 
-        // destroy only returns the slot to this cache's free-list. The backing
-        // ArrayList is not shrunk here, so memory usage can grow with the peak
-        // number of nodes and is released only by deinit().
+        // destroy only returns the slot to this cache's free-list. Chunks are
+        // not freed here, so memory usage can grow with the peak number of nodes
+        // and is released only by deinit().
         pub fn destroy(self: *Self, loc: Location) void {
-            self.nodes.items[loc.addr] = Slot{ .free = self.free_head };
+            self.slot(loc.addr).* = Slot{ .free = self.free_head };
             self.free_head = loc.addr;
             self.free_count += 1;
         }
@@ -96,8 +118,20 @@ pub fn LocationCache(comptime K: type, comptime V: type, comptime Tags: type) ty
             return utils.fastDeinitAllowed(self.a);
         }
 
+        fn chunkIndex(addr: Address) usize {
+            return @as(usize, addr >> chunk_bits);
+        }
+
+        fn slotIndex(addr: Address) usize {
+            return @as(usize, addr & chunk_mask);
+        }
+
+        fn slot(self: *Self, addr: Address) *Slot {
+            return &self.chunks.items[chunkIndex(addr)].slots[slotIndex(addr)];
+        }
+
         fn node(self: *Self, loc: Location) *Node {
-            return &self.nodes.items[loc.addr].used;
+            return &self.slot(loc.addr).used;
         }
 
         pub fn eq(_: *Self, lhs: Location, rhs: Location) bool {
