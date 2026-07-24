@@ -3,10 +3,24 @@ const math = std.math;
 const direction = @import("direction.zig").direction;
 const ptrLocationCache = @import("ptr_location.zig").LocationCache;
 const arrayLocationCache = @import("array_location.zig").LocationCache;
+const stableArrayLocationCache = @import("stable_array_location.zig").LocationCache;
 
+// NodeCacheType selects how tree nodes are stored.
 pub const NodeCacheType = enum(u8) {
+    // PointerBased allocates each node separately through the provided allocator.
+    // It keeps value pointers stable across future insertions and is the most
+    // conservative default backend.
     PointerBased,
+
+    // ArrayBased stores nodes in a contiguous ArrayList-backed slot cache.
+    // It usually has good locality and compact node links, but future insertions
+    // may reallocate the backing array and invalidate previously returned *V pointers.
     ArrayBased,
+
+    // StableArrayBased stores nodes in fixed-size chunks addressed by compact u32
+    // handles. It keeps value pointers stable across future insertions; chunks are
+    // kept until deinit(), so memory usage can grow to the peak node count.
+    StableArrayBased,
 };
 
 // Options defines some comptime parameters of the tree type.
@@ -14,6 +28,10 @@ pub const Options = struct {
     // countChildren, if set, enables children counts for every node of the tree.
     // the number of children allows to locate a node by its position with a guaranteed complexity O(logn).
     countChildren: bool = false,
+
+    // nodeCacheType selects the node storage backend. PointerBased is the safest
+    // default, ArrayBased favors locality with a pointer-stability caveat, and
+    // StableArrayBased preserves pointer stability with chunked storage.
     nodeCacheType: NodeCacheType = .PointerBased,
 };
 
@@ -52,6 +70,7 @@ pub fn TreeWithOptions(comptime K: type, comptime V: type, comptime Cmp: fn (a: 
         const cacheType = switch (options.nodeCacheType) {
             .ArrayBased => arrayLocationCache(K, V, Tags),
             .PointerBased => ptrLocationCache(K, V, Tags),
+            .StableArrayBased => stableArrayLocationCache(K, V, Tags),
         };
         break :blk cacheType;
     };

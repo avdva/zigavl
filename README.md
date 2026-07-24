@@ -62,7 +62,9 @@ pub fn descendFromEnd(self: *Self) Iterator
 
 Notes:
 - `countChildren = true` enables `O(logn)` positional access. It stores child counts as `u32`, so trees larger than `maxInt(u32) + 1` elements are not supported in this mode.
-- `nodeCacheType = .ArrayBased` stores tree nodes in an array-backed free-list cache instead of allocating each node separately.
+- `nodeCacheType = .PointerBased` allocates nodes separately and keeps returned value pointers stable across future insertions.
+- `nodeCacheType = .ArrayBased` stores tree nodes in an array-backed free-list cache instead of allocating each node separately. Future insertions may reallocate storage and invalidate previously returned value pointers.
+- `nodeCacheType = .StableArrayBased` stores tree nodes in fixed-size chunks. It keeps returned value pointers stable across future insertions, while memory usage can grow to the peak node count until `deinit`.
 - `Entry.Value` points into the tree and can be used to update the stored value. `KV.Value` is an owned value copied out from a deleted node.
 - Iterators are valid only for the tree that created them. If the node pointed to by an iterator is deleted, that iterator becomes invalid; use the iterator returned by `deleteIterator`.
 

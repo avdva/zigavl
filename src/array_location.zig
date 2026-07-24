@@ -10,9 +10,11 @@ pub fn LocationCache(comptime K: type, comptime V: type, comptime Tags: type) ty
         const Address = u32;
         const InvalidAddr = std.math.maxInt(Address);
 
-        // Location is a compact stable handle into the cache's slots array.
+        // Location is a compact handle into the cache's slots array.
         // It deliberately does not store a pointer back to the cache; all storage
         // access goes through LocationCache methods.
+        // The handle stays valid across ArrayList reallocations, but pointers
+        // returned to node values can be invalidated by future insertions.
         pub const Location = struct {
             const Loc = @This();
             pub const NodeData = node_lib.MakeDataType(K, V, Tags);
