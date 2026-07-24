@@ -97,9 +97,9 @@ test "tree example usage" {
     }
 }
 
-test "array based value pointers survive cache growth" {
+test "stable array based value pointers survive cache growth" {
     const a = std.testing.allocator;
-    const TreeType = lib.TreeWithOptions(i64, i64, i64Cmp, .{ .nodeCacheType = .ArrayBased });
+    const TreeType = lib.TreeWithOptions(i64, i64, i64Cmp, .{ .nodeCacheType = .StableArrayBased });
     var t = try TreeType.init(a);
     defer t.deinit();
 
