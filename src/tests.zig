@@ -17,11 +17,11 @@ test "test pub decls" {
     var t = try TreeType.initWithOptions(aa.allocator(), options);
     defer t.deinit();
     _ = try t.insert(0, 0);
-    var it = t.ascendFromStart();
+    var it = t.iteratorAtFirst();
     const min = t.getMin().?;
     try std.testing.expectEqual(it.value().?.Key, min.Key);
     const max = t.getMax().?;
-    it = t.descendFromEnd();
+    it = t.iteratorAtLast();
     try std.testing.expectEqual(it.value().?.Key, max.Key);
     try std.testing.expectEqual(@as(i64, 0), t.at(0).Key);
     try std.testing.expectEqual(@as(i64, 0), t.at(0).Value.*);
@@ -54,7 +54,7 @@ test "tree example usage" {
         @panic("invalid get result");
     }
     // iterate
-    var it = t.ascendFromStart();
+    var it = t.iteratorAtFirst();
     i = 0;
     while (it.value()) |e| {
         if (e.Key != i) {
@@ -67,7 +67,7 @@ test "tree example usage" {
         it.next();
     }
     //delete iterator
-    var second_it = t.deleteIterator(t.ascendFromStart());
+    var second_it = t.deleteIterator(t.iteratorAtFirst());
     if (second_it.value().?.Key != 1 or second_it.value().?.Value.* != 1) {
         @panic("invalid deleteIterator result");
     }
@@ -82,7 +82,7 @@ test "tree example usage" {
     }
 
     // ascend from pos.
-    it = t.ascendAt(3);
+    it = t.iteratorAt(3);
     if (it.value()) |val| {
         if (val.Key != 6) {
             @panic("invalid key");

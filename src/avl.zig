@@ -674,22 +674,54 @@ fn InitTreeType(comptime K: type, comptime V: type, comptime Cache: type, compti
             return null;
         }
 
-        // ascendFromStart returns an iterator pointing to the first element.
+        // iteratorAtFirst returns an iterator positioned at the first element.
         // Time complexity: O(1).
-        pub fn ascendFromStart(self: *Self) Iterator {
-            return Iterator{
-                .tree = self,
-                .loc = self.min,
-            };
+        pub fn iteratorAtFirst(self: *Self) Iterator {
+            return Iterator.init(self, self.min);
         }
 
-        // descendFromEnd returns an iterator pointing to the last element.
+        // iteratorAtLast returns an iterator positioned at the last element.
         // Time complexity: O(1).
-        pub fn descendFromEnd(self: *Self) Iterator {
-            return Iterator{
-                .tree = self,
-                .loc = self.max,
-            };
+        pub fn iteratorAtLast(self: *Self) Iterator {
+            return Iterator.init(self, self.max);
+        }
+
+        // lowerBound returns an iterator positioned at the first element whose key is not less than k.
+        // Time complexity: O(logn).
+        pub fn lowerBound(self: *Self, k: K) Iterator {
+            var loc = self.root;
+            var candidate: ?Location = null;
+            while (loc) |l| {
+                switch (Comparer(k, self.data(l).k)) {
+                    .lt, .eq => {
+                        candidate = l;
+                        loc = self.child(l, .left);
+                    },
+                    .gt => {
+                        loc = self.child(l, .right);
+                    },
+                }
+            }
+            return Iterator.init(self, candidate);
+        }
+
+        // upperBound returns an iterator positioned at the first element whose key is greater than k.
+        // Time complexity: O(logn).
+        pub fn upperBound(self: *Self, k: K) Iterator {
+            var loc = self.root;
+            var candidate: ?Location = null;
+            while (loc) |l| {
+                switch (Comparer(k, self.data(l).k)) {
+                    .lt => {
+                        candidate = l;
+                        loc = self.child(l, .left);
+                    },
+                    .eq, .gt => {
+                        loc = self.child(l, .right);
+                    },
+                }
+            }
+            return Iterator.init(self, candidate);
         }
 
         // deleteIterator deletes an iterator from the tree and returns
@@ -731,17 +763,14 @@ fn InitTreeType(comptime K: type, comptime V: type, comptime Cache: type, compti
             };
         }
 
-        // ascendAt returns an iterator pointing to the ith element.
+        // iteratorAt returns an iterator positioned at the ith element.
         // Panics if position >= tree.Len().
         // Time complexity:
         //  O(logn) - if children node counts are enabled.
         //  O(n) - otherwise.
-        pub fn ascendAt(self: *Self, pos: usize) Iterator {
+        pub fn iteratorAt(self: *Self, pos: usize) Iterator {
             const loc = self.locateAt(pos);
-            return Iterator{
-                .tree = self,
-                .loc = loc,
-            };
+            return Iterator.init(self, loc);
         }
 
         // KV is a key-value pair.
@@ -989,13 +1018,25 @@ fn i64Cmp(a: i64, b: i64) math.Order {
     return math.order(a, b);
 }
 
+const Pair = struct {
+    first: i64,
+    second: i64,
+};
+
+fn pairCmp(a: Pair, b: Pair) math.Order {
+    return switch (math.order(a.first, b.first)) {
+        .eq => math.order(a.second, b.second),
+        else => |order| order,
+    };
+}
+
 test "empty tree" {
     const a = std.testing.allocator;
     const TreeType = TreeWithOptions(i64, i64, i64Cmp, .{ .countChildren = true });
     var t = try TreeType.init(a);
     defer t.deinit();
 
-    var it = t.ascendFromStart();
+    var it = t.iteratorAtFirst();
     try std.testing.expectEqual(@as(?TreeType.Entry, null), it.value());
 
     try std.testing.expect(t.delete(0) == null);
@@ -1255,7 +1296,7 @@ fn testTreeUpdateKey(comptime options: Options) !void {
         try std.testing.expectEqual(@as(i64, 9), t.getMax().?.Key);
         try checkHeightAndBalance(&t);
 
-        var it = t.ascendFromStart();
+        var it = t.iteratorAtFirst();
         var prev: ?i64 = null;
         while (it.value()) |entry| {
             if (prev) |p| {
@@ -1286,7 +1327,7 @@ fn testTreeUpdateKey(comptime options: Options) !void {
             try checkHeightAndBalance(&t);
         }
 
-        var it = t.ascendFromStart();
+        var it = t.iteratorAtFirst();
         var prev: ?i64 = null;
         var count: usize = 0;
         while (it.value()) |entry| {
@@ -1449,7 +1490,7 @@ test "tree iterator" {
         try std.testing.expect(ir.inserted);
         i += 1;
     }
-    var it = t.ascendFromStart();
+    var it = t.iteratorAtFirst();
     i = 0;
     while (i < 128) {
         const e = it.value();
@@ -1460,7 +1501,7 @@ test "tree iterator" {
     }
     try std.testing.expectEqual(@as(?TreeType.Entry, null), it.value());
 
-    it = t.descendFromEnd();
+    it = t.iteratorAtLast();
     i = 127;
     while (i >= 0) {
         const e = it.value();
@@ -1471,7 +1512,7 @@ test "tree iterator" {
     }
     try std.testing.expectEqual(@as(?TreeType.Entry, null), it.value());
 
-    it = t.ascendFromStart();
+    it = t.iteratorAtFirst();
     i = 0;
     while (i < 64) {
         try std.testing.expect(it.value() != null);
@@ -1487,7 +1528,7 @@ test "tree iterator" {
         i += 1;
     }
 
-    it = t.ascendFromStart();
+    it = t.iteratorAtFirst();
     i = 0;
     while (i < 64) {
         const e = it.value();
@@ -1500,7 +1541,7 @@ test "tree iterator" {
     try std.testing.expectEqual(@as(?TreeType.Entry, null), it.value());
 }
 
-test "tree ascendAt" {
+test "tree iteratorAt" {
     const a = std.testing.allocator;
     const TreeType = TreeWithOptions(i64, i64, i64Cmp, .{ .countChildren = true });
     var t = try TreeType.init(a);
@@ -1514,7 +1555,7 @@ test "tree ascendAt" {
     }
     i = 0;
     while (i < 128) {
-        var it = t.ascendAt(@as(usize, @intCast(i)));
+        var it = t.iteratorAt(@as(usize, @intCast(i)));
         var e = it.value();
         try std.testing.expectEqual(i, e.?.Key);
         try std.testing.expectEqual(i, e.?.Value.*);
@@ -1526,7 +1567,7 @@ test "tree ascendAt" {
             try std.testing.expectEqual(j, e.?.Value.*);
             j -= 1;
         }
-        it = t.ascendAt(@as(usize, @intCast(i)));
+        it = t.iteratorAt(@as(usize, @intCast(i)));
         j = i + 1;
         while (j < t.len()) {
             it.next();
@@ -1537,6 +1578,43 @@ test "tree ascendAt" {
         }
         i += 1;
     }
+}
+
+test "tree bounds" {
+    const a = std.testing.allocator;
+    const TreeType = TreeWithOptions(i64, i64, i64Cmp, .{ .countChildren = true });
+    var t = try TreeType.init(a);
+    defer t.deinit();
+
+    for ([_]i64{ 10, 20, 30 }) |key| {
+        _ = try t.insert(key, key);
+    }
+
+    try std.testing.expectEqual(@as(i64, 10), t.lowerBound(5).value().?.Key);
+    try std.testing.expectEqual(@as(i64, 10), t.lowerBound(10).value().?.Key);
+    try std.testing.expectEqual(@as(i64, 30), t.lowerBound(25).value().?.Key);
+    try std.testing.expectEqual(@as(?TreeType.Entry, null), t.lowerBound(31).value());
+
+    try std.testing.expectEqual(@as(i64, 10), t.upperBound(5).value().?.Key);
+    try std.testing.expectEqual(@as(i64, 20), t.upperBound(10).value().?.Key);
+    try std.testing.expectEqual(@as(i64, 30), t.upperBound(20).value().?.Key);
+    try std.testing.expectEqual(@as(?TreeType.Entry, null), t.upperBound(30).value());
+}
+
+test "tree bounds with composite keys" {
+    const a = std.testing.allocator;
+    const TreeType = Tree(Pair, i64, pairCmp);
+    var t = try TreeType.init(a);
+    defer t.deinit();
+
+    _ = try t.insert(.{ .first = 10, .second = 10 }, 10);
+    _ = try t.insert(.{ .first = 20, .second = 20 }, 20);
+    _ = try t.insert(.{ .first = 20, .second = 30 }, 30);
+    _ = try t.insert(.{ .first = 30, .second = 40 }, 40);
+
+    try std.testing.expectEqual(Pair{ .first = 20, .second = 20 }, t.lowerBound(.{ .first = 20, .second = 0 }).value().?.Key);
+    try std.testing.expectEqual(Pair{ .first = 20, .second = 20 }, t.lowerBound(.{ .first = 20, .second = 20 }).value().?.Key);
+    try std.testing.expectEqual(Pair{ .first = 30, .second = 40 }, t.upperBound(.{ .first = 20, .second = 30 }).value().?.Key);
 }
 
 fn testTreeRandom(comptime options: Options) !void {
