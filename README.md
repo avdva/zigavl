@@ -54,9 +54,11 @@ pub fn at(self: *Self, pos: usize) Entry
 pub fn deleteAt(self: *Self, pos: usize) KV
 
 // iterate:
-pub fn ascendFromStart(self: *Self) Iterator
-pub fn ascendAt(self: *Self, pos: usize) Iterator
-pub fn descendFromEnd(self: *Self) Iterator
+pub fn iteratorAtFirst(self: *Self) Iterator
+pub fn iteratorAtLast(self: *Self) Iterator
+pub fn iteratorAt(self: *Self, pos: usize) Iterator
+pub fn lowerBound(self: *Self, k: K) Iterator
+pub fn upperBound(self: *Self, k: K) Iterator
 
 ```
 
@@ -104,7 +106,7 @@ pub fn main() !void {
         @panic("invalid get result");
     }
     // iterate
-    var it = t.ascendFromStart();
+    var it = t.iteratorAtFirst();
     i = 0;
     while (it.value()) |e| {
         if (e.Key != i) {
@@ -117,7 +119,7 @@ pub fn main() !void {
         it.next();
     }
     //delete iterator
-    var second_it = t.deleteIterator(t.ascendFromStart());
+    var second_it = t.deleteIterator(t.iteratorAtFirst());
     if (second_it.value().?.Key != 1 or second_it.value().?.Value.* != 1) {
         @panic("invalid deleteIterator result");
     }
@@ -131,8 +133,8 @@ pub fn main() !void {
         @panic("invalid deleteAt result");
     }
 
-    // ascend from pos.
-    it = t.ascendAt(3);
+    // position iterator at a sorted position.
+    it = t.iteratorAt(3);
     if (it.value()) |val| {
         if (val.Key != 6) {
             @panic("invalid key");

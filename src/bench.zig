@@ -223,7 +223,7 @@ fn benchIterator(comptime name: []const u8, comptime options: zigavl.Options, a:
 
     var checksum: i64 = 0;
     const start = nowNs();
-    var it = tree.ascendFromStart();
+    var it = tree.iteratorAtFirst();
     while (it.value()) |entry| {
         checksum += entry.Value.*;
         it.next();
