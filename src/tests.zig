@@ -95,6 +95,18 @@ test "tree example usage" {
     if (updated_key_value.?.* != 5) {
         @panic("invalid value");
     }
+
+    if (t.rank(15) != 7) {
+        @panic("invalid rank");
+    }
+
+    if (t.rankDistance(3, 15) != 7) {
+        @panic("invalid rank distance");
+    }
+
+    if (t.countInRange(4, 15) != 7) {
+        @panic("invalid range count");
+    }
 }
 
 test "stable array based value pointers survive cache growth" {
