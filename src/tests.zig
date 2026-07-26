@@ -100,12 +100,12 @@ test "tree example usage" {
         @panic("invalid rank");
     }
 
-    if (t.keyDistance(3, 15) != 7) {
-        @panic("invalid key distance");
+    if (t.rankDistance(3, 15) != 7) {
+        @panic("invalid rank distance");
     }
 
-    if (t.countOfElementsBetweenKeys(4, 15) != 7) {
-        @panic("invalid count between keys");
+    if (t.countInRange(4, 15) != 7) {
+        @panic("invalid range count");
     }
 }
 

@@ -802,24 +802,24 @@ fn InitTreeType(comptime K: type, comptime V: type, comptime Cache: type, compti
             return null;
         }
 
-        // keyDistance returns the number of hops between k1 and k2.
-        // if k1 or k2 is not present in the tree, keyDistance returns null.
+        // rankDistance returns the absolute distance between sorted positions of k1 and k2.
+        // If k1 or k2 is not present in the tree, rankDistance returns null.
         // Time complexity:
         //  O(logn) - if children node counts are enabled.
         //  O(n) - otherwise.
-        pub fn keyDistance(self: *Self, k1: K, k2: K) ?usize {
+        pub fn rankDistance(self: *Self, k1: K, k2: K) ?usize {
             const r1 = self.rank(k1) orelse return null;
             const r2 = self.rank(k2) orelse return null;
             return if (r2 >= r1) r2 - r1 else r1 - r2;
         }
 
-        // countOfElementsBetweenKeys returns the number of elements
-        // on the interval [k1;k2]. k1 and k2 themselves may not be present in the tree.
+        // countInRange returns the number of elements on the inclusive interval [k1, k2].
+        // k1 and k2 themselves may not be present in the tree.
         // Example: [10 20 30 40 50 60], k1=15, k2=50 --> 4.
         // Time complexity:
         //  O(logn) - if children node counts are enabled.
         //  O(n) - otherwise.
-        pub fn countOfElementsBetweenKeys(self: *Self, k1: K, k2: K) usize {
+        pub fn countInRange(self: *Self, k1: K, k2: K) usize {
             const r1 = self.lowerBoundRank(k1) orelse return 0;
             const r2 = self.floorRank(k2) orelse return 0;
             return if (r2 >= r1) r2 - r1 + 1 else 0;
@@ -1206,6 +1206,70 @@ fn pairCmp(a: Pair, b: Pair) math.Order {
         .eq => math.order(a.second, b.second),
         else => |order| order,
     };
+}
+
+fn sortedRank(keys: []const i64, key: i64) ?usize {
+    for (keys, 0..) |candidate, idx| {
+        switch (i64Cmp(key, candidate)) {
+            .lt => return null,
+            .eq => return idx,
+            .gt => {},
+        }
+    }
+    return null;
+}
+
+fn sortedLowerBoundRank(keys: []const i64, key: i64) ?usize {
+    for (keys, 0..) |candidate, idx| {
+        switch (i64Cmp(key, candidate)) {
+            .lt, .eq => return idx,
+            .gt => {},
+        }
+    }
+    return null;
+}
+
+fn sortedFloorRank(keys: []const i64, key: i64) ?usize {
+    var result: ?usize = null;
+    for (keys, 0..) |candidate, idx| {
+        switch (i64Cmp(key, candidate)) {
+            .lt => return result,
+            .eq => return idx,
+            .gt => result = idx,
+        }
+    }
+    return result;
+}
+
+fn sortedUpperBoundRank(keys: []const i64, key: i64) ?usize {
+    for (keys, 0..) |candidate, idx| {
+        switch (i64Cmp(key, candidate)) {
+            .lt => return idx,
+            .eq, .gt => {},
+        }
+    }
+    return null;
+}
+
+fn sortedCountInRange(keys: []const i64, k1: i64, k2: i64) usize {
+    const r1 = sortedLowerBoundRank(keys, k1) orelse return 0;
+    const r2 = sortedFloorRank(keys, k2) orelse return 0;
+    return if (r2 >= r1) r2 - r1 + 1 else 0;
+}
+
+fn sortedRankDistance(keys: []const i64, k1: i64, k2: i64) ?usize {
+    const r1 = sortedRank(keys, k1) orelse return null;
+    const r2 = sortedRank(keys, k2) orelse return null;
+    return if (r2 >= r1) r2 - r1 else r1 - r2;
+}
+
+fn expectOptionalEntryKey(comptime Entry: type, expected: ?i64, actual: ?Entry) !void {
+    if (expected) |key| {
+        try std.testing.expect(actual != null);
+        try std.testing.expectEqual(key, actual.?.Key);
+    } else {
+        try std.testing.expectEqual(@as(?Entry, null), actual);
+    }
 }
 
 test "empty tree" {
@@ -1600,7 +1664,7 @@ test "tree at_countChildren" {
 
 test "tree at_nocountChildren" {
     const a = std.testing.allocator;
-    const TreeType = TreeWithOptions(i64, i64, i64Cmp, .{ .countChildren = true });
+    const TreeType = TreeWithOptions(i64, i64, i64Cmp, .{ .countChildren = false });
     var t = try TreeType.init(a);
     defer t.deinit();
 
@@ -1649,7 +1713,7 @@ test "tree rank without countChildren" {
     try testTreeRank(.{ .countChildren = false });
 }
 
-fn testCountOfElementsBetweenKeys(comptime options: Options) !void {
+fn testCountInRange(comptime options: Options) !void {
     const a = std.testing.allocator;
     const TreeType = TreeWithOptions(i64, i64, i64Cmp, options);
     var t = try TreeType.init(a);
@@ -1659,37 +1723,37 @@ fn testCountOfElementsBetweenKeys(comptime options: Options) !void {
         _ = try t.insert(key, key);
     }
 
-    try std.testing.expectEqual(@as(usize, 0), t.countOfElementsBetweenKeys(1, 2));
-    try std.testing.expectEqual(@as(usize, 0), t.countOfElementsBetweenKeys(2, 1));
-    try std.testing.expectEqual(@as(usize, 0), t.countOfElementsBetweenKeys(51, 52));
-    try std.testing.expectEqual(@as(usize, 0), t.countOfElementsBetweenKeys(52, 51));
-    try std.testing.expectEqual(@as(usize, 1), t.countOfElementsBetweenKeys(10, 10));
-    try std.testing.expectEqual(@as(usize, 2), t.countOfElementsBetweenKeys(10, 20));
-    try std.testing.expectEqual(@as(usize, 3), t.countOfElementsBetweenKeys(10, 30));
-    try std.testing.expectEqual(@as(usize, 4), t.countOfElementsBetweenKeys(10, 40));
-    try std.testing.expectEqual(@as(usize, 1), t.countOfElementsBetweenKeys(9, 10));
-    try std.testing.expectEqual(@as(usize, 1), t.countOfElementsBetweenKeys(10, 10));
-    try std.testing.expectEqual(@as(usize, 3), t.countOfElementsBetweenKeys(9, 30));
-    try std.testing.expectEqual(@as(usize, 3), t.countOfElementsBetweenKeys(9, 31));
-    try std.testing.expectEqual(@as(usize, 0), t.countOfElementsBetweenKeys(31, 9));
-    try std.testing.expectEqual(@as(usize, 5), t.countOfElementsBetweenKeys(9, 100));
-    try std.testing.expectEqual(@as(usize, 5), t.countOfElementsBetweenKeys(10, 50));
-    try std.testing.expectEqual(@as(usize, 0), t.countOfElementsBetweenKeys(11, 19));
-    try std.testing.expectEqual(@as(usize, 0), t.countOfElementsBetweenKeys(21, 29));
-    try std.testing.expectEqual(@as(usize, 1), t.countOfElementsBetweenKeys(50, 50));
-    try std.testing.expectEqual(@as(usize, 1), t.countOfElementsBetweenKeys(50, 60));
-    try std.testing.expectEqual(@as(usize, 0), t.countOfElementsBetweenKeys(20, 10));
+    try std.testing.expectEqual(@as(usize, 0), t.countInRange(1, 2));
+    try std.testing.expectEqual(@as(usize, 0), t.countInRange(2, 1));
+    try std.testing.expectEqual(@as(usize, 0), t.countInRange(51, 52));
+    try std.testing.expectEqual(@as(usize, 0), t.countInRange(52, 51));
+    try std.testing.expectEqual(@as(usize, 1), t.countInRange(10, 10));
+    try std.testing.expectEqual(@as(usize, 2), t.countInRange(10, 20));
+    try std.testing.expectEqual(@as(usize, 3), t.countInRange(10, 30));
+    try std.testing.expectEqual(@as(usize, 4), t.countInRange(10, 40));
+    try std.testing.expectEqual(@as(usize, 1), t.countInRange(9, 10));
+    try std.testing.expectEqual(@as(usize, 1), t.countInRange(10, 10));
+    try std.testing.expectEqual(@as(usize, 3), t.countInRange(9, 30));
+    try std.testing.expectEqual(@as(usize, 3), t.countInRange(9, 31));
+    try std.testing.expectEqual(@as(usize, 0), t.countInRange(31, 9));
+    try std.testing.expectEqual(@as(usize, 5), t.countInRange(9, 100));
+    try std.testing.expectEqual(@as(usize, 5), t.countInRange(10, 50));
+    try std.testing.expectEqual(@as(usize, 0), t.countInRange(11, 19));
+    try std.testing.expectEqual(@as(usize, 0), t.countInRange(21, 29));
+    try std.testing.expectEqual(@as(usize, 1), t.countInRange(50, 50));
+    try std.testing.expectEqual(@as(usize, 1), t.countInRange(50, 60));
+    try std.testing.expectEqual(@as(usize, 0), t.countInRange(20, 10));
 }
 
-test "tree countOfElementsBetweenKeys without countChildren" {
-    try testCountOfElementsBetweenKeys(.{ .countChildren = false });
+test "tree countInRange without countChildren" {
+    try testCountInRange(.{ .countChildren = false });
 }
 
-test "tree countOfElementsBetweenKeys with countChildren" {
-    try testCountOfElementsBetweenKeys(.{ .countChildren = true });
+test "tree countInRange with countChildren" {
+    try testCountInRange(.{ .countChildren = true });
 }
 
-fn testTreeKeyDistance(comptime options: Options) !void {
+fn testTreeRankDistance(comptime options: Options) !void {
     const a = std.testing.allocator;
     const TreeType = TreeWithOptions(i64, i64, i64Cmp, options);
     var t = try TreeType.init(a);
@@ -1699,24 +1763,81 @@ fn testTreeKeyDistance(comptime options: Options) !void {
         _ = try t.insert(key, key);
     }
 
-    try std.testing.expectEqual(@as(?usize, 0), t.keyDistance(10, 10));
-    try std.testing.expectEqual(@as(?usize, 1), t.keyDistance(10, 20));
-    try std.testing.expectEqual(@as(?usize, 2), t.keyDistance(20, 40));
-    try std.testing.expectEqual(@as(?usize, 3), t.keyDistance(10, 40));
-    try std.testing.expectEqual(@as(?usize, 4), t.keyDistance(10, 50));
-    try std.testing.expectEqual(@as(?usize, 4), t.keyDistance(50, 10));
+    try std.testing.expectEqual(@as(?usize, 0), t.rankDistance(10, 10));
+    try std.testing.expectEqual(@as(?usize, 1), t.rankDistance(10, 20));
+    try std.testing.expectEqual(@as(?usize, 2), t.rankDistance(20, 40));
+    try std.testing.expectEqual(@as(?usize, 3), t.rankDistance(10, 40));
+    try std.testing.expectEqual(@as(?usize, 4), t.rankDistance(10, 50));
+    try std.testing.expectEqual(@as(?usize, 4), t.rankDistance(50, 10));
 
-    try std.testing.expectEqual(@as(?usize, null), t.keyDistance(5, 10));
-    try std.testing.expectEqual(@as(?usize, null), t.keyDistance(10, 5));
-    try std.testing.expectEqual(@as(?usize, null), t.keyDistance(5, 60));
+    try std.testing.expectEqual(@as(?usize, null), t.rankDistance(5, 10));
+    try std.testing.expectEqual(@as(?usize, null), t.rankDistance(10, 5));
+    try std.testing.expectEqual(@as(?usize, null), t.rankDistance(5, 60));
 }
 
-test "tree keyDistance with countChildren" {
-    try testTreeKeyDistance(.{ .countChildren = true });
+test "tree rankDistance with countChildren" {
+    try testTreeRankDistance(.{ .countChildren = true });
 }
 
-test "tree keyDistance without countChildren" {
-    try testTreeKeyDistance(.{ .countChildren = false });
+test "tree rankDistance without countChildren" {
+    try testTreeRankDistance(.{ .countChildren = false });
+}
+
+fn testRankRangeAndBoundsAgainstSortedSlice(comptime options: Options) !void {
+    const a = std.testing.allocator;
+    const TreeType = TreeWithOptions(i64, i64, i64Cmp, options);
+    var t = try TreeType.init(a);
+    defer t.deinit();
+
+    const sorted_keys = [_]i64{ -50, -10, 0, 3, 4, 10, 17, 31, 32, 99 };
+    var insert_keys = sorted_keys;
+
+    var prng = std.Random.DefaultPrng.init(0x5eed);
+    prng.random().shuffle(i64, insert_keys[0..]);
+
+    for (insert_keys) |key| {
+        const result = try t.insert(key, key);
+        try std.testing.expect(result.inserted);
+    }
+
+    for (sorted_keys, 0..) |key, idx| {
+        try std.testing.expectEqual(@as(?usize, idx), t.rank(key));
+        try std.testing.expectEqual(key, t.at(idx).Key);
+        try std.testing.expectEqual(key, t.iteratorAt(idx).value().?.Key);
+    }
+
+    const query_keys = [_]i64{
+        -60, -50, -49, -11, -10, -9, -1, 0,  1,  3,  4,   5,
+        10,  16,  17,  18,  30,  31, 32, 33, 98, 99, 100,
+    };
+
+    for (query_keys) |key| {
+        const lower_rank = sortedLowerBoundRank(&sorted_keys, key);
+        const lower_key = if (lower_rank) |rank| sorted_keys[rank] else null;
+        try expectOptionalEntryKey(TreeType.Entry, lower_key, t.lowerBound(key).value());
+
+        const upper_rank = sortedUpperBoundRank(&sorted_keys, key);
+        const upper_key = if (upper_rank) |rank| sorted_keys[rank] else null;
+        try expectOptionalEntryKey(TreeType.Entry, upper_key, t.upperBound(key).value());
+
+        try std.testing.expectEqual(sortedRank(&sorted_keys, key), t.rank(key));
+    }
+
+    for (query_keys) |k1| {
+        for (query_keys) |k2| {
+            try std.testing.expectEqual(sortedCountInRange(&sorted_keys, k1, k2), t.countInRange(k1, k2));
+            try std.testing.expectEqual(sortedRankDistance(&sorted_keys, k1, k2), t.rankDistance(k1, k2));
+        }
+    }
+}
+
+test "tree rank range and bounds match sorted slice across options" {
+    try testRankRangeAndBoundsAgainstSortedSlice(.{ .countChildren = false, .nodeCacheType = .PointerBased });
+    try testRankRangeAndBoundsAgainstSortedSlice(.{ .countChildren = true, .nodeCacheType = .PointerBased });
+    try testRankRangeAndBoundsAgainstSortedSlice(.{ .countChildren = false, .nodeCacheType = .ArrayBased });
+    try testRankRangeAndBoundsAgainstSortedSlice(.{ .countChildren = true, .nodeCacheType = .ArrayBased });
+    try testRankRangeAndBoundsAgainstSortedSlice(.{ .countChildren = false, .nodeCacheType = .StableArrayBased });
+    try testRankRangeAndBoundsAgainstSortedSlice(.{ .countChildren = true, .nodeCacheType = .StableArrayBased });
 }
 
 test "tree floorRankWithCountChildren" {
