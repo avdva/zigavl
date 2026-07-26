@@ -50,6 +50,9 @@ pub const KV = struct {
     Key: K,
     Value: V,
 };
+pub fn rank(self: *Self, k: K) ?usize
+pub fn keyDistance(self: *Self, k1: K, k2: K) ?usize
+pub fn countOfElementsBetweenKeys(self: *Self, k1: K, k2: K) usize
 pub fn at(self: *Self, pos: usize) Entry
 pub fn deleteAt(self: *Self, pos: usize) KV
 
@@ -63,7 +66,7 @@ pub fn upperBound(self: *Self, k: K) Iterator
 ```
 
 Notes:
-- `countChildren = true` enables `O(logn)` positional access. It stores child counts as `u32`, so trees larger than `maxInt(u32) + 1` elements are not supported in this mode.
+- `countChildren = true` enables `O(logn)` positional access. Without it, `rank`, `keyDistance`, `countOfElementsBetweenKeys`, `at`, `iteratorAt`, and `deleteAt` may scan linearly. It stores child counts as `u32`, so trees larger than `maxInt(u32) + 1` elements are not supported in this mode.
 - `nodeCacheType = .PointerBased` allocates nodes separately and keeps returned value pointers stable across future insertions.
 - `nodeCacheType = .ArrayBased` stores tree nodes in an array-backed free-list cache instead of allocating each node separately. Future insertions may reallocate storage and invalidate previously returned value pointers.
 - `nodeCacheType = .StableArrayBased` stores tree nodes in fixed-size chunks. It keeps returned value pointers stable across future insertions, while memory usage can grow to the peak node count until `deinit`.
@@ -147,6 +150,18 @@ pub fn main() !void {
     const updated_key_value = t.updateKey(5, 15);
     if (updated_key_value.?.* != 5) {
         @panic("invalid value");
+    }
+
+    if (t.rank(15) != 7) {
+        @panic("invalid rank");
+    }
+
+    if (t.keyDistance(3, 15) != 7) {
+        @panic("invalid key distance");
+    }
+
+    if (t.countOfElementsBetweenKeys(4, 15) != 7) {
+        @panic("invalid count between keys");
     }
 }
 
