@@ -1,7 +1,13 @@
 .{
     .name = .zigavl,
-    .version = "0.7.1",
+    .version = "1.0.0",
     .dependencies = .{},
-    .paths = .{""},
+    .paths = .{
+        "build.zig",
+        "build.zig.zon",
+        "src",
+        "README.md",
+        "LICENSE",
+    },
     .fingerprint = 0x5ddc07961fb6bf2e,
 }
