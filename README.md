@@ -8,6 +8,24 @@ To use this library, you need at least Zig 0.16.x.
 
 ![Build Status](https://img.shields.io/github/actions/workflow/status/avdva/zigavl/workflow.yml?branch=main)
 
+## Installation
+
+Add zigavl to your `build.zig.zon`:
+
+```sh
+zig fetch --save git+https://github.com/avdva/zigavl#v1.0.0
+```
+
+Then expose the dependency module in your `build.zig`:
+
+```zig
+const zigavl = b.dependency("zigavl", .{
+    .target = target,
+    .optimize = optimize,
+});
+exe.root_module.addImport("zigavl", zigavl.module("zigavl"));
+```
+
 ## API
 ```zig
 // create tree type:
