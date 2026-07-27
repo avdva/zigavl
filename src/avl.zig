@@ -140,6 +140,9 @@ fn InitTreeType(comptime K: type, comptime V: type, comptime Cache: type, compti
             return r;
         }
 
+        // nextInOrderLocation returns the sorted successor of loc.
+        // If loc has a right subtree, the successor is its leftmost node.
+        // Otherwise, walk up until leaving a left edge.
         fn nextInOrderLocation(self: *Self, loc: Location) ?Location {
             var l = loc;
             if (self.child(l, .right)) |r| {
@@ -155,6 +158,9 @@ fn InitTreeType(comptime K: type, comptime V: type, comptime Cache: type, compti
             }
         }
 
+        // prevInOrderLocation returns the sorted predecessor of loc.
+        // It mirrors nextInOrderLocation: first try the rightmost node in the
+        // left subtree, then walk up until leaving a right edge.
         fn prevInOrderLocation(self: *Self, loc: Location) ?Location {
             var l = loc;
             if (self.child(l, .left)) |left| {
@@ -190,6 +196,11 @@ fn InitTreeType(comptime K: type, comptime V: type, comptime Cache: type, compti
             return l;
         }
 
+        // nextPostOrderLocation returns the next node in post-order traversal.
+        // It is used by the normal deinit path, where children must be destroyed
+        // before their parent. If loc is a left child and its parent has a right
+        // subtree, traversal descends into that subtree first; otherwise the parent
+        // itself is next.
         fn nextPostOrderLocation(self: *Self, loc: Location) ?Location {
             const l = loc;
             const p = self.parent(l) orelse return null;
@@ -204,6 +215,9 @@ fn InitTreeType(comptime K: type, comptime V: type, comptime Cache: type, compti
             }
         }
 
+        // advance moves loc by count sorted positions. Positive values move to
+        // successors, negative values move to predecessors. If traversal reaches
+        // either end before count is exhausted, the last valid location is returned.
         fn advance(self: *Self, loc: Location, count: isize) Location {
             var res = loc;
             var c = count;
@@ -218,6 +232,9 @@ fn InitTreeType(comptime K: type, comptime V: type, comptime Cache: type, compti
             return res;
         }
 
+        // reparent attaches child_loc as p's child at dir and updates the child's
+        // parent pointer at the same time. Passing null for child_loc disconnects
+        // that side of p; passing null for p makes child_loc parentless.
         fn reparent(self: *Self, p: ?Location, dir: direction, child_loc: ?Location) void {
             if (p) |parent_loc| {
                 self.setChildAt(parent_loc, dir, child_loc);
@@ -259,6 +276,9 @@ fn InitTreeType(comptime K: type, comptime V: type, comptime Cache: type, compti
             return .center;
         }
 
+        // recalcCounts refreshes loc's cached subtree size from its direct children.
+        // The stored value is the number of descendants, not including loc itself;
+        // callers add one when they need a whole child subtree size.
         fn recalcCounts(self: *Self, loc: Location) void {
             var count: u32 = 0;
             if (self.child(loc, .left)) |left| {
@@ -270,6 +290,9 @@ fn InitTreeType(comptime K: type, comptime V: type, comptime Cache: type, compti
             self.data(loc).tags.childrenCount = count;
         }
 
+        // updateCounts walks from loc to the root after a structural change that
+        // did not require a full rebalance walk, keeping ancestor descendant counts
+        // consistent for rank and position-based operations.
         fn updateCounts(self: *Self, loc: Location) void {
             var mutLoc: ?Location = loc;
             while (mutLoc) |*l| {
@@ -278,6 +301,8 @@ fn InitTreeType(comptime K: type, comptime V: type, comptime Cache: type, compti
             }
         }
 
+        // leftCount returns the number of nodes in loc's left subtree. Rank helpers
+        // use it to skip whole left subtrees without walking them.
         fn leftCount(self: *Self, loc: Location) usize {
             if (self.child(loc, .left)) |left| {
                 return 1 + self.data(left).tags.childrenCount;
@@ -285,6 +310,9 @@ fn InitTreeType(comptime K: type, comptime V: type, comptime Cache: type, compti
             return 0;
         }
 
+        // recalcHeight refreshes loc's cached AVL height from its children.
+        // It returns true when the height changed, which lets insertion rebalance
+        // stop early once ancestors cannot be affected.
         fn recalcHeight(self: *Self, loc: Location) bool {
             var h: u8 = 0;
             if (self.child(loc, .left)) |l| {
@@ -350,12 +378,12 @@ fn InitTreeType(comptime K: type, comptime V: type, comptime Cache: type, compti
         min: ?Location,
         max: ?Location,
 
-        // init initializes the tree.
+        // init initializes the tree with default options.
         pub fn init(a: std.mem.Allocator) !Self {
             return Self.initWithOptions(a, .{});
         }
 
-        // initWithOptions initializes the tree.
+        // initWithOptions initializes the tree with given options.
         pub fn initWithOptions(a: std.mem.Allocator, io: InitOptions) !Self {
             return Self{
                 .lc = try Cache.init(a),
@@ -504,6 +532,9 @@ fn InitTreeType(comptime K: type, comptime V: type, comptime Cache: type, compti
             self.lc.destroy(loc);
         }
 
+        // canUpdateKeyInPlace checks whether new_key still belongs between loc's
+        // in-order neighbors. If it does, changing only the key preserves the BST
+        // ordering and avoids delete+insert work.
         fn canUpdateKeyInPlace(self: *Self, loc: Location, new_key: K) bool {
             if (self.prevInOrderLocation(loc)) |prev| {
                 if (Comparer(self.data(prev).k, new_key) != .lt) {
@@ -583,6 +614,10 @@ fn InitTreeType(comptime K: type, comptime V: type, comptime Cache: type, compti
             return v;
         }
 
+        // deleteAndReplace removes loc from the tree and moves a replacement node
+        // into its place when needed. It updates min/max eagerly, reconnects parent
+        // and child links, and starts rebalancing at the lowest node whose height
+        // may have changed.
         fn deleteAndReplace(self: *Self, loc: Location) void {
             const replacement = self.findReplacement(loc);
             if (self.min) |min| {
@@ -631,6 +666,9 @@ fn InitTreeType(comptime K: type, comptime V: type, comptime Cache: type, compti
             }
         }
 
+        // findReplacement chooses the node that will physically replace loc during
+        // deletion. With two children it uses the in-order predecessor or successor
+        // from the taller side, following Brown's optimized AVL deletion strategy.
         fn findReplacement(self: *Self, loc: Location) ?Location {
             const left = self.child(loc, .left);
             const right = self.child(loc, .right);
@@ -766,6 +804,9 @@ fn InitTreeType(comptime K: type, comptime V: type, comptime Cache: type, compti
             return self.rankWithCountChildren(k);
         }
 
+        // rankWithCountChildren uses cached left-subtree sizes to compute the rank
+        // while descending the search path. Every time the search goes right, all
+        // nodes in the left subtree plus the current node are known to come before k.
         fn rankWithCountChildren(self: *Self, k: K) ?usize {
             var loc = self.root;
             var result: usize = 0;
@@ -786,6 +827,9 @@ fn InitTreeType(comptime K: type, comptime V: type, comptime Cache: type, compti
             return null;
         }
 
+        // rankLinearly is the fallback used when countChildren is disabled. It
+        // walks the sorted iterator until k is found or until the next key is
+        // already greater than k.
         fn rankLinearly(self: *Self, k: K) ?usize {
             var it = self.iteratorAtFirst();
             var result: usize = 0;
@@ -841,6 +885,8 @@ fn InitTreeType(comptime K: type, comptime V: type, comptime Cache: type, compti
             return self.floorRankLinearly(k);
         }
 
+        // lowerBoundRankLinearly returns the rank of the first key >= k by scanning
+        // in sorted order. It returns null when all keys are smaller than k.
         fn lowerBoundRankLinearly(self: *Self, k: K) ?usize {
             var it = self.iteratorAtFirst();
             var result: usize = 0;
@@ -856,6 +902,8 @@ fn InitTreeType(comptime K: type, comptime V: type, comptime Cache: type, compti
             return null;
         }
 
+        // floorRankLinearly returns the rank of the last key <= k by scanning in
+        // sorted order. It returns null when all keys are greater than k.
         fn floorRankLinearly(self: *Self, k: K) ?usize {
             var it = self.iteratorAtFirst();
             var result: usize = 0;
@@ -875,6 +923,9 @@ fn InitTreeType(comptime K: type, comptime V: type, comptime Cache: type, compti
             return result - 1;
         }
 
+        // floorRankWithCountChildren mirrors floorRankLinearly but uses cached
+        // subtree sizes. candidate_rank tracks the best key <= k seen so far while
+        // the search descends toward where k would be inserted.
         fn floorRankWithCountChildren(self: *Self, k: K) ?usize {
             var loc = self.root;
             var current_rank: usize = 0;
@@ -901,6 +952,9 @@ fn InitTreeType(comptime K: type, comptime V: type, comptime Cache: type, compti
             return candidate_rank;
         }
 
+        // lowerBoundRankWithCountChildren returns the rank of the first key >= k.
+        // current_rank is the number of nodes proven to be before the current
+        // subtree, and candidate_rank stores the best possible lower bound found.
         fn lowerBoundRankWithCountChildren(self: *Self, k: K) ?usize {
             var loc = self.root;
             var current_rank: usize = 0;
@@ -980,6 +1034,10 @@ fn InitTreeType(comptime K: type, comptime V: type, comptime Cache: type, compti
             }
         }
 
+        // treeRotated reconnects a freshly rotated subtree to the old parent.
+        // Rotation helpers only rearrange links inside the local subtree and return
+        // its new root; this helper either attaches that root to oldRoot's parent
+        // or promotes it to the tree root when the rotated subtree was the root.
         fn treeRotated(self: *Self, parent_loc: ?Location, oldRoot: Location, newRoot: Location) void {
             if (parent_loc) |p| {
                 self.reparent(p, self.childDir(p, oldRoot), newRoot);
@@ -988,6 +1046,17 @@ fn InitTreeType(comptime K: type, comptime V: type, comptime Cache: type, compti
             }
         }
 
+        // checkBalance walks from loc toward the root, recalculating heights and
+        // child counts and rotating the first unbalanced subtree it finds.
+        //
+        // When all_way_up is false, the walk stops once a node height does not
+        // change: ancestors above it cannot become newly unbalanced. When it is
+        // true, the walk continues to the root because the caller already knows
+        // that ancestor counts/heights may need a full refresh after relinking.
+        //
+        // balance(l) == -2 means the left subtree is too tall. The child balance
+        // chooses a single right rotation (rr) or a double left-right rotation (lr).
+        // balance(l) == 2 mirrors that with right-left (rl) or single left (ll).
         fn checkBalance(self: *Self, loc: ?Location, all_way_up: bool) void {
             var mutLoc = loc;
             while (mutLoc) |*mlPtr| {
@@ -1038,6 +1107,23 @@ fn InitTreeType(comptime K: type, comptime V: type, comptime Cache: type, compti
             }
         }
 
+        // rr performs a single right rotation around l.
+        //
+        // Before:
+        //
+        //         l
+        //        /
+        //     left
+        //     /  \
+        //    A    B
+        //
+        // After:
+        //
+        //      left
+        //      /  \
+        //     A    l
+        //         /
+        //        B
         fn rr(self: *Self, loc: Location) Location {
             const l = loc;
             const left = self.child(l, .left).?;
@@ -1057,6 +1143,25 @@ fn InitTreeType(comptime K: type, comptime V: type, comptime Cache: type, compti
             return left;
         }
 
+        // lr performs a double left-right rotation around l.
+        //
+        // Before:
+        //
+        //          l
+        //         /
+        //      left
+        //        \
+        //      left_right
+        //       /      \
+        //      B        C
+        //
+        // After:
+        //
+        //      left_right
+        //       /      \
+        //    left       l
+        //      \       /
+        //       B     C
         fn lr(self: *Self, loc: Location) Location {
             const l = loc;
             const left = self.child(l, .left).?;
@@ -1083,6 +1188,25 @@ fn InitTreeType(comptime K: type, comptime V: type, comptime Cache: type, compti
             return left_right;
         }
 
+        // rl performs a double right-left rotation around l.
+        //
+        // Before:
+        //
+        //      l
+        //       \
+        //       right
+        //       /
+        //   right_left
+        //    /      \
+        //   B        C
+        //
+        // After:
+        //
+        //      right_left
+        //       /      \
+        //      l       right
+        //       \      /
+        //        B    C
         fn rl(self: *Self, loc: Location) Location {
             const l = loc;
             const right = self.child(l, .right).?;
@@ -1110,6 +1234,23 @@ fn InitTreeType(comptime K: type, comptime V: type, comptime Cache: type, compti
             return right_left;
         }
 
+        // ll performs a single left rotation around l.
+        //
+        // Before:
+        //
+        //      l
+        //       \
+        //       right
+        //       /   \
+        //      B     C
+        //
+        // After:
+        //
+        //       right
+        //       /   \
+        //      l     C
+        //       \
+        //        B
         fn ll(self: *Self, loc: Location) Location {
             const l = loc;
             const right = self.child(l, .right).?;
@@ -1159,11 +1300,17 @@ fn InitTreeType(comptime K: type, comptime V: type, comptime Cache: type, compti
             return result;
         }
 
+        // shouldLocateAtLinearly keeps near-edge lookups cheap. Even with subtree
+        // counts enabled, taking a few iterator steps from min/max is simpler and
+        // often faster than walking the tree by rank.
         fn shouldLocateAtLinearly(self: *Self, pos: usize) bool {
             const p = @min(pos, self.length - pos - 1);
             return p <= 8;
         }
 
+        // locateAt returns the node at sorted position pos. With countChildren it
+        // descends by comparing pos with left subtree sizes; without counts it
+        // falls back to iterator-style movement from the nearest end.
         fn locateAt(self: *Self, pos: usize) Location {
             if (pos >= self.len()) {
                 @panic("index out of range");
