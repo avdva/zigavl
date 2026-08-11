@@ -395,6 +395,24 @@ fn InitTreeType(comptime K: type, comptime V: type, comptime Cache: type, compti
             };
         }
 
+        fn destroyAllNodes(self: *Self) void {
+            const min = self.min orelse return;
+            var loc = self.goLeftRight(min);
+            while (true) {
+                const l = loc orelse break;
+                const next = self.nextPostOrderLocation(l);
+                self.lc.destroy(l);
+                loc = next;
+            }
+        }
+
+        fn resetTreeLinks(self: *Self) void {
+            self.length = 0;
+            self.root = null;
+            self.min = null;
+            self.max = null;
+        }
+
         // deinit releases the memory taken by all the nodes.
         // Time complexity:
         //  O(1) - if fast deinit is enabled (see InitOptions.allowFastDeinit).
@@ -404,14 +422,21 @@ fn InitTreeType(comptime K: type, comptime V: type, comptime Cache: type, compti
             if (self.io.allowFastDeinit == .always or self.io.allowFastDeinit == .auto and self.lc.fastDeinitAllowed()) {
                 return;
             }
-            const min = self.min orelse return;
-            var loc = self.goLeftRight(min);
-            while (true) {
-                const l = loc orelse break;
-                const next = self.nextPostOrderLocation(l);
-                self.lc.destroy(l);
-                loc = next;
+            self.destroyAllNodes();
+        }
+
+        // clear removes all elements and releases node storage owned by the tree.
+        // Complexity depends on node cache type:
+        //  O(n) - PointerBased.
+        //  O(1) - ArrayBased.
+        //  O(number_of_chunks) - StableArrayBased.
+        pub fn clear(self: *Self) void {
+            if (@hasDecl(Cache, "clearAll")) {
+                self.lc.clearAll();
+            } else {
+                self.destroyAllNodes();
             }
+            self.resetTreeLinks();
         }
 
         // len returns the number of elements.
@@ -1431,6 +1456,48 @@ test "empty tree" {
     try std.testing.expect(t.delete(0) == null);
 }
 
+fn testTreeClear(comptime options: Options) !void {
+    const a = std.testing.allocator;
+    const TreeType = TreeWithOptions(i64, i64, i64Cmp, options);
+    var t = try TreeType.init(a);
+    defer t.deinit();
+
+    t.clear();
+    try std.testing.expectEqual(@as(usize, 0), t.len());
+    try std.testing.expectEqual(@as(?TreeType.Entry, null), t.getMin());
+    try std.testing.expectEqual(@as(?TreeType.Entry, null), t.getMax());
+
+    for (0..128) |idx| {
+        const key: i64 = @intCast(idx);
+        const result = try t.insert(key, key);
+        try std.testing.expect(result.inserted);
+    }
+
+    t.clear();
+    try std.testing.expectEqual(@as(usize, 0), t.len());
+    try std.testing.expectEqual(@as(?TreeType.Entry, null), t.getMin());
+    try std.testing.expectEqual(@as(?TreeType.Entry, null), t.getMax());
+    try std.testing.expectEqual(@as(?*i64, null), t.get(64));
+    try std.testing.expectEqual(@as(?TreeType.Entry, null), t.iteratorAtFirst().value());
+    try std.testing.expectEqual(@as(?usize, null), t.rank(64));
+    try std.testing.expectEqual(@as(usize, 0), t.countInRange(0, 127));
+
+    const inserted = try t.insert(42, 100);
+    try std.testing.expect(inserted.inserted);
+    try std.testing.expectEqual(@as(usize, 1), t.len());
+    try std.testing.expectEqual(@as(i64, 100), t.get(42).?.*);
+    try std.testing.expectEqual(@as(?usize, 0), t.rank(42));
+}
+
+test "tree clear across options" {
+    try testTreeClear(.{ .countChildren = false, .nodeCacheType = .PointerBased });
+    try testTreeClear(.{ .countChildren = true, .nodeCacheType = .PointerBased });
+    try testTreeClear(.{ .countChildren = false, .nodeCacheType = .ArrayBased });
+    try testTreeClear(.{ .countChildren = true, .nodeCacheType = .ArrayBased });
+    try testTreeClear(.{ .countChildren = false, .nodeCacheType = .StableArrayBased });
+    try testTreeClear(.{ .countChildren = true, .nodeCacheType = .StableArrayBased });
+}
+
 test "tree getOrInsert" {
     const a = std.testing.allocator;
     const TreeType = Tree(i64, i64, i64Cmp);
@@ -1737,6 +1804,23 @@ test "tree updateKey (pointer cache)" {
 
 test "tree updateKey (array cache)" {
     try testTreeUpdateKey(.{ .countChildren = true, .nodeCacheType = .ArrayBased });
+}
+
+test "stable array based value pointers survive cache growth" {
+    const a = std.testing.allocator;
+    const TreeType = TreeWithOptions(i64, i64, i64Cmp, .{ .nodeCacheType = .StableArrayBased });
+    var t = try TreeType.init(a);
+    defer t.deinit();
+
+    const first = (try t.insert(0, 42)).v;
+    for (1..4096) |idx| {
+        const key: i64 = @intCast(idx);
+        _ = try t.insert(key, key);
+    }
+
+    try std.testing.expectEqual(@as(i64, 42), first.*);
+    first.* = 99;
+    try std.testing.expectEqual(@as(i64, 99), t.get(0).?.*);
 }
 
 test "delete min" {
