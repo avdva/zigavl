@@ -70,6 +70,13 @@ pub fn LocationCache(comptime K: type, comptime V: type, comptime Tags: type) ty
             self.nodes.deinit(self.a);
         }
 
+        pub fn clearAll(self: *Self) void {
+            self.nodes.deinit(self.a);
+            self.nodes = .empty;
+            self.free_head = InvalidAddr;
+            self.free_count = 0;
+        }
+
         pub fn create(self: *Self) !Location {
             if (self.free_head != InvalidAddr) {
                 const addr = self.free_head;

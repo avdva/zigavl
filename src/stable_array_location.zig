@@ -81,6 +81,17 @@ pub fn LocationCache(comptime K: type, comptime V: type, comptime Tags: type) ty
             self.chunks.deinit(self.a);
         }
 
+        pub fn clearAll(self: *Self) void {
+            for (self.chunks.items) |chunk| {
+                self.a.destroy(chunk);
+            }
+            self.chunks.deinit(self.a);
+            self.chunks = .empty;
+            self.len = 0;
+            self.free_head = InvalidAddr;
+            self.free_count = 0;
+        }
+
         pub fn create(self: *Self) !Location {
             if (self.free_head != InvalidAddr) {
                 const addr = self.free_head;

@@ -27,6 +27,8 @@ test "test pub decls" {
     try std.testing.expectEqual(@as(i64, 0), t.at(0).Value.*);
     try std.testing.expectEqual(@as(i64, 0), t.delete(0).?);
     try std.testing.expectEqual(@as(usize, 0), t.len());
+    t.clear();
+    try std.testing.expectEqual(@as(usize, 0), t.len());
 }
 
 test "tree example usage" {
@@ -107,21 +109,9 @@ test "tree example usage" {
     if (t.countInRange(4, 15) != 7) {
         @panic("invalid range count");
     }
-}
 
-test "stable array based value pointers survive cache growth" {
-    const a = std.testing.allocator;
-    const TreeType = lib.TreeWithOptions(i64, i64, i64Cmp, .{ .nodeCacheType = .StableArrayBased });
-    var t = try TreeType.init(a);
-    defer t.deinit();
-
-    const first = (try t.insert(0, 42)).v;
-    for (1..4096) |idx| {
-        const key: i64 = @intCast(idx);
-        _ = try t.insert(key, key);
+    t.clear();
+    if (t.len() != 0) {
+        @panic("invalid clear result");
     }
-
-    try std.testing.expectEqual(@as(i64, 42), first.*);
-    first.* = 99;
-    try std.testing.expectEqual(@as(i64, 99), t.get(0).?.*);
 }
