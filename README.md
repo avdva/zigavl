@@ -13,7 +13,7 @@ To use this library, you need at least Zig 0.16.x.
 Add zigavl to your `build.zig.zon`:
 
 ```sh
-zig fetch --save git+https://github.com/avdva/zigavl#v1.0.0
+zig fetch --save git+https://github.com/avdva/zigavl#v1.1.0
 ```
 
 Then expose the dependency module in your `build.zig`:
