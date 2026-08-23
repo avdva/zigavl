@@ -1,7 +1,7 @@
 const std = @import("std");
 const math = std.math;
 const direction = @import("direction.zig").direction;
-const ptrLocationCache = @import("ptr_location.zig").LocationCache;
+const ptrLocationCache = @import("pointer_location.zig").LocationCache;
 const arrayLocationCache = @import("array_location.zig").LocationCache;
 const stableArrayLocationCache = @import("stable_array_location.zig").LocationCache;
 

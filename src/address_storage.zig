@@ -29,7 +29,7 @@ fn movedAddress(anchor: ?Address, addr_1: Address, addr_2: Address) ?Address {
     return addr;
 }
 
-fn relocateMany(cache: anytype, stream1: anytype, stream2: anytype, anchor: ?Address) ?Address {
+fn relocateStream(cache: anytype, stream1: anytype, stream2: anytype, anchor: ?Address) ?Address {
     var new_anchor = anchor;
     while (true) {
         const addr_1: Address = stream1.next() orelse break;
@@ -244,13 +244,13 @@ pub fn reclaim(cache: anytype, loadFactor: u16, anchor: ?Address) ?Address {
             // slots outside the compact prefix are ignored because they will be
             // dropped from the logical storage length.
             var freeLocator = FreeListSlotsLocator(CachePtr).init(cache, first_tail_address);
-            new_anchor = relocateMany(cache, &usedLocator, &freeLocator, new_anchor);
+            new_anchor = relocateStream(cache, &usedLocator, &freeLocator, new_anchor);
         } else {
             // If the free-list is larger than the occupied prefix, scanning the
             // short prefix linearly is usually cheaper and more cache-friendly
             // than chasing many free-list links through the tail.
             var freeLocator = LinearPrefixFreeSlotsLocator(CachePtr).init(cache, first_tail_address);
-            new_anchor = relocateMany(cache, &usedLocator, &freeLocator, new_anchor);
+            new_anchor = relocateStream(cache, &usedLocator, &freeLocator, new_anchor);
         }
         cache.finishReclaim(new_free_count);
     }
