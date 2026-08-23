@@ -1,4 +1,5 @@
 const std = @import("std");
+const address_storage = @import("address_storage.zig");
 const direction = @import("direction.zig").direction;
 const node_lib = @import("node.zig");
 const utils = @import("utils.zig");
@@ -7,8 +8,8 @@ pub fn LocationCache(comptime K: type, comptime V: type, comptime Tags: type) ty
     return struct {
         const Self = @This();
 
-        const Address = u32;
-        const InvalidAddr = std.math.maxInt(Address);
+        pub const Address = address_storage.Address;
+        pub const InvalidAddr = address_storage.InvalidAddr;
 
         // Location is a compact handle into the cache's slots array.
         // It deliberately does not store a pointer back to the cache; all storage
@@ -44,13 +45,7 @@ pub fn LocationCache(comptime K: type, comptime V: type, comptime Tags: type) ty
             }
         };
 
-        // A slot is either occupied by a tree node or belongs to the free-list.
-        // Free slots store the next free address directly, with InvalidAddr as
-        // the end-of-list sentinel. No tagged state is stored separately.
-        const Slot = union {
-            used: Node,
-            free: Address,
-        };
+        const Slot = address_storage.MakeSlot(Node);
 
         a: std.mem.Allocator,
         nodes: std.ArrayList(Slot),
@@ -96,8 +91,12 @@ pub fn LocationCache(comptime K: type, comptime V: type, comptime Tags: type) ty
         // ArrayList is not shrunk here, so memory usage can grow with the peak
         // number of nodes and is released only by deinit().
         pub fn destroy(self: *Self, loc: Location) void {
-            self.nodes.items[loc.addr] = Slot{ .free = self.free_head };
-            self.free_head = loc.addr;
+            self.destroyAtAddress(loc.addr);
+        }
+
+        fn destroyAtAddress(self: *Self, addr: Address) void {
+            self.nodes.items[addr] = Slot{ .free = self.free_head };
+            self.free_head = addr;
             self.free_count += 1;
         }
 
@@ -143,5 +142,75 @@ pub fn LocationCache(comptime K: type, comptime V: type, comptime Tags: type) ty
         pub fn setParent(self: *Self, loc: *Location, p: ?Location) void {
             self.node(loc.*).parent = if (p) |parent_loc| parent_loc.addr else InvalidAddr;
         }
+
+        // reclaim delegates address compaction to the shared storage logic and
+        // converts the returned anchor address back to Location.
+        pub fn reclaim(self: *Self, loadFactor: u16, anchor: ?Location) ?Location {
+            const anchor_addr = if (anchor) |loc| loc.addr else null;
+            const new_anchor = address_storage.reclaim(self, loadFactor, anchor_addr);
+            return if (new_anchor) |addr| Location.init(addr) else null;
+        }
+
+        pub fn slotsLen(self: *Self) usize {
+            return self.nodes.items.len;
+        }
+
+        pub fn freeCount(self: *Self) usize {
+            return self.free_count;
+        }
+
+        pub fn freeHead(self: *Self) Address {
+            return self.free_head;
+        }
+
+        pub fn slotAt(self: *Self, addr: Address) *Slot {
+            return &self.nodes.items[addr];
+        }
+
+        pub fn finishReclaim(self: *Self, new_free_count: usize) void {
+            const used_count = self.nodes.items.len - self.free_count;
+            if (used_count == 0 and self.nodes.items.len == 0 and self.nodes.capacity > 0) {
+                self.nodes.expandToCapacity();
+            }
+            self.nodes.shrinkAndFree(self.a, used_count + new_free_count);
+            self.nodes.shrinkRetainingCapacity(used_count);
+            self.free_count = 0;
+            self.free_head = InvalidAddr;
+        }
     };
+}
+
+test "locationcache reclaim" {
+    const LocationType = LocationCache(i64, i64, struct {});
+    try address_storage.testReclaimEmpty(LocationType);
+}
+
+test "locationcache reclaim compacts prefix" {
+    const LocationType = LocationCache(i64, i64, struct {});
+    try address_storage.testReclaimCompactsPrefix(LocationType);
+}
+
+test "locationcache reclaim scans prefix when free list is larger than used part" {
+    const LocationType = LocationCache(i64, i64, struct {});
+    try address_storage.testReclaimScansPrefixWhenFreeListIsLarger(LocationType);
+}
+
+test "locationcache reclaim clamps load factor" {
+    const LocationType = LocationCache(i64, i64, struct {});
+    try address_storage.testReclaimClampsLoadFactor(LocationType);
+}
+
+test "locationcache reclaim preserves spare capacity" {
+    const a = std.testing.allocator;
+    const LocationType = LocationCache(i64, i64, struct {});
+    var lc = try LocationType.init(a);
+    defer lc.deinit();
+
+    const l1 = try lc.create();
+    const l2 = try lc.create();
+    lc.destroy(l1);
+    const capacity_before = lc.nodes.capacity;
+
+    try std.testing.expectEqual(l2, lc.reclaim(200, l2).?);
+    try std.testing.expectEqual(capacity_before, lc.nodes.capacity);
 }
