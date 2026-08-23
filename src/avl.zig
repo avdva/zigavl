@@ -439,6 +439,21 @@ fn InitTreeType(comptime K: type, comptime V: type, comptime Cache: type, compti
             self.resetTreeLinks();
         }
 
+        // compactStorage asks the backing node cache to release storage kept by
+        // removed nodes, when that cache supports compaction. It may move nodes,
+        // invalidating existing iterators, locations, entries, and value pointers.
+        // Caches without compaction support leave the tree untouched.
+        pub fn compactStorage(self: *Self) void {
+            if (!@hasDecl(Cache, "reclaim")) {
+                return;
+            }
+            self.root = self.lc.reclaim(0, self.root);
+            if (self.root) |root| {
+                self.min = self.goLeft(root);
+                self.max = self.goRight(root);
+            }
+        }
+
         // len returns the number of elements.
         pub fn len(self: *const Self) usize {
             return self.length;
@@ -1496,6 +1511,68 @@ test "tree clear across options" {
     try testTreeClear(.{ .countChildren = true, .nodeCacheType = .ArrayBased });
     try testTreeClear(.{ .countChildren = false, .nodeCacheType = .StableArrayBased });
     try testTreeClear(.{ .countChildren = true, .nodeCacheType = .StableArrayBased });
+}
+
+fn testTreeReclaimSearchable(comptime options: Options) !void {
+    const a = std.testing.allocator;
+    const TreeType = TreeWithOptions(i64, i64, i64Cmp, options);
+    var t = try TreeType.init(a);
+    defer t.deinit();
+
+    for (0..16) |idx| {
+        const key: i64 = @intCast(idx);
+        _ = try t.insert(key, key * 10);
+    }
+
+    try std.testing.expectEqual(@as(i64, 10), t.delete(1).?);
+    try std.testing.expectEqual(@as(i64, 30), t.delete(3).?);
+    try std.testing.expectEqual(@as(i64, 60), t.delete(6).?);
+    try std.testing.expectEqual(@as(i64, 70), t.delete(7).?);
+
+    t.compactStorage();
+
+    const expected = [_]i64{ 0, 2, 4, 5, 8, 9, 10, 11, 12, 13, 14, 15 };
+    try std.testing.expectEqual(expected.len, t.len());
+    try std.testing.expectEqual(@as(i64, 0), t.getMin().?.Key);
+    try std.testing.expectEqual(@as(i64, 15), t.getMax().?.Key);
+    try std.testing.expectEqual(@as(?usize, 4), t.rank(8));
+    try std.testing.expectEqual(@as(usize, 4), t.countInRange(8, 11));
+
+    var it = t.iteratorAtFirst();
+    for (expected) |key| {
+        const entry = it.value() orelse return error.MissingEntry;
+        try std.testing.expectEqual(key, entry.Key);
+        try std.testing.expectEqual(key * 10, entry.Value.*);
+        it.next();
+    }
+    try std.testing.expectEqual(@as(?TreeType.Entry, null), it.value());
+}
+
+test "tree compactStorage keeps compacting caches searchable" {
+    try testTreeReclaimSearchable(.{ .countChildren = true, .nodeCacheType = .ArrayBased });
+    try testTreeReclaimSearchable(.{ .countChildren = true, .nodeCacheType = .StableArrayBased });
+}
+
+fn testTreeCompactStorageNoop(comptime options: Options) !void {
+    const a = std.testing.allocator;
+    const TreeType = TreeWithOptions(i64, i64, i64Cmp, options);
+    var t = try TreeType.init(a);
+    defer t.deinit();
+
+    _ = try t.insert(2, 20);
+    _ = try t.insert(1, 10);
+    _ = try t.insert(3, 30);
+
+    t.compactStorage();
+
+    try std.testing.expectEqual(@as(usize, 3), t.len());
+    try std.testing.expectEqual(@as(i64, 1), t.getMin().?.Key);
+    try std.testing.expectEqual(@as(i64, 3), t.getMax().?.Key);
+    try std.testing.expectEqual(@as(i64, 20), t.get(2).?.*);
+}
+
+test "tree compactStorage is noop for pointer cache" {
+    try testTreeCompactStorageNoop(.{ .nodeCacheType = .PointerBased });
 }
 
 test "tree getOrInsert" {

@@ -44,6 +44,7 @@ pub fn init(a: std.mem.Allocator) !Self
 pub fn initWithOptions(a: std.mem.Allocator, io: InitOptions) !Self
 pub fn deinit()
 pub fn clear(self: *Self) void
+pub fn compactStorage(self: *Self) void
 
 // insert:
 pub fn insert(self: *Self, k: K, v: V) !InsertResult
@@ -88,7 +89,8 @@ Notes:
 - `countChildren = true` enables `O(logn)` positional access. Without it, `rank`, `rankDistance`, `countInRange`, `at`, `iteratorAt`, and `deleteAt` may scan linearly. It stores child counts as `u32`, so trees larger than `maxInt(u32) + 1` elements are not supported in this mode.
 - `nodeCacheType = .PointerBased` allocates nodes separately and keeps returned value pointers stable across future insertions.
 - `nodeCacheType = .ArrayBased` stores tree nodes in an array-backed free-list cache instead of allocating each node separately. Future insertions may reallocate storage and invalidate previously returned value pointers.
-- `nodeCacheType = .StableArrayBased` stores tree nodes in fixed-size chunks. It keeps returned value pointers stable across future insertions, while memory usage can grow to the peak node count until `deinit`.
+- `nodeCacheType = .StableArrayBased` stores tree nodes in fixed-size chunks. It keeps returned value pointers stable across future insertions, while memory usage can grow to the peak node count until `compactStorage`, `clear`, or `deinit`.
+- `compactStorage()` compacts address-based caches after deletions. `.ArrayBased` can shrink its backing array and `.StableArrayBased` can free unused tail chunks; `.PointerBased` treats it as a no-op.
 - `clear()` removes all elements and releases node storage owned by the tree. Complexity depends on storage backend: `O(n)` for `.PointerBased`, `O(1)` for `.ArrayBased`, and `O(number_of_chunks)` for `.StableArrayBased`.
 - `Entry.Value` points into the tree and can be used to update the stored value. `KV.Value` is an owned value copied out from a deleted node.
 - Iterators are valid only for the tree that created them. If the node pointed to by an iterator is deleted, that iterator becomes invalid; use the iterator returned by `deleteIterator`.
