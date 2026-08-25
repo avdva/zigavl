@@ -494,25 +494,19 @@ fn InitTreeType(comptime K: type, comptime V: type, comptime Cache: type, compti
                 return;
             }
 
-            var loc = self.min;
-            var new_min: ?Location = null;
-            var pos: usize = 0;
+            self.min = self.lc.relocate(self.min.?, 0);
+            var loc = self.nextInOrderLocation(self.min.?);
+            var pos: usize = 1;
             while (loc) |current| {
                 const moved = self.lc.relocate(current, pos);
-                if (new_min == null) {
-                    new_min = moved;
-                }
                 loc = self.nextInOrderLocation(moved);
                 pos += 1;
             }
 
             self.lc.finishOrderStorage(self.length);
 
-            const min = new_min.?;
-            self.min = min;
-            const root = self.goRoot(min);
-            self.root = root;
-            self.max = self.goRight(root);
+            self.root = self.goRoot(self.min.?);
+            self.max = self.goRight(self.root.?);
             self.storage_ordered = true;
         }
 
