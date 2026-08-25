@@ -88,6 +88,18 @@ fn InitTreeType(comptime K: type, comptime V: type, comptime Cache: type, compti
         const Comparer = Cmp;
         const TreeOptions = options;
 
+        const cacheCapabilities = struct {
+            hasFastClear: bool,
+            hasCompactStorage: bool,
+            hasOrderedStorage: bool,
+        }{
+            .hasFastClear = @hasDecl(Cache, "clearAll"),
+            .hasCompactStorage = @hasDecl(Cache, "reclaim"),
+            .hasOrderedStorage = @hasDecl(Cache, "relocate") and
+                @hasDecl(Cache, "finishOrderStorage") and
+                @hasDecl(Cache, "locationAt"),
+        };
+
         const LocateResult = struct {
             loc: ?Location,
             dir: direction,
@@ -136,6 +148,15 @@ fn InitTreeType(comptime K: type, comptime V: type, comptime Cache: type, compti
             while (true) {
                 const right = self.child(r, .right) orelse break;
                 r = right;
+            }
+            return r;
+        }
+
+        fn goRoot(self: *Self, loc: Location) Location {
+            var r = loc;
+            while (true) {
+                const parent_loc = self.parent(r) orelse break;
+                r = parent_loc;
             }
             return r;
         }
@@ -377,6 +398,7 @@ fn InitTreeType(comptime K: type, comptime V: type, comptime Cache: type, compti
         root: ?Location,
         min: ?Location,
         max: ?Location,
+        storage_ordered: bool,
 
         // init initializes the tree with default options.
         pub fn init(a: std.mem.Allocator) !Self {
@@ -391,6 +413,7 @@ fn InitTreeType(comptime K: type, comptime V: type, comptime Cache: type, compti
                 .root = null,
                 .min = null,
                 .max = null,
+                .storage_ordered = false,
                 .io = io,
             };
         }
@@ -411,6 +434,7 @@ fn InitTreeType(comptime K: type, comptime V: type, comptime Cache: type, compti
             self.root = null;
             self.min = null;
             self.max = null;
+            self.storage_ordered = false;
         }
 
         // deinit releases the memory taken by all the nodes.
@@ -431,7 +455,7 @@ fn InitTreeType(comptime K: type, comptime V: type, comptime Cache: type, compti
         //  O(1) - ArrayBased.
         //  O(number_of_chunks) - StableArrayBased.
         pub fn clear(self: *Self) void {
-            if (@hasDecl(Cache, "clearAll")) {
+            if (cacheCapabilities.hasFastClear) {
                 self.lc.clearAll();
             } else {
                 self.destroyAllNodes();
@@ -444,14 +468,52 @@ fn InitTreeType(comptime K: type, comptime V: type, comptime Cache: type, compti
         // invalidating existing iterators, locations, entries, and value pointers.
         // Caches without compaction support leave the tree untouched.
         pub fn compactStorage(self: *Self) void {
-            if (!@hasDecl(Cache, "reclaim")) {
+            if (!cacheCapabilities.hasCompactStorage) {
                 return;
             }
+            self.storage_ordered = false;
             self.root = self.lc.reclaim(0, self.root);
             if (self.root) |root| {
                 self.min = self.goLeft(root);
                 self.max = self.goRight(root);
             }
+        }
+
+        // orderStorageByKey moves nodes in address-based caches so sorted
+        // position N is stored at address N. This enables O(1) lookup by sorted
+        // index until the next structural mutation. It may move nodes,
+        // invalidating existing iterators, locations, entries, and value pointers.
+        // Caches without ordering support leave the tree untouched.
+        pub fn orderStorageByKey(self: *Self) void {
+            if (!cacheCapabilities.hasOrderedStorage) {
+                return;
+            }
+            if (self.length == 0) {
+                self.lc.finishOrderStorage(0);
+                self.storage_ordered = true;
+                return;
+            }
+
+            var loc = self.min;
+            var new_min: ?Location = null;
+            var pos: usize = 0;
+            while (loc) |current| {
+                const moved = self.lc.relocate(current, pos);
+                if (new_min == null) {
+                    new_min = moved;
+                }
+                loc = self.nextInOrderLocation(moved);
+                pos += 1;
+            }
+
+            self.lc.finishOrderStorage(self.length);
+
+            const min = new_min.?;
+            self.min = min;
+            const root = self.goRoot(min);
+            self.root = root;
+            self.max = self.goRight(root);
+            self.storage_ordered = true;
         }
 
         // len returns the number of elements.
@@ -538,6 +600,7 @@ fn InitTreeType(comptime K: type, comptime V: type, comptime Cache: type, compti
         }
 
         fn insertNew(self: *Self, where: LocateResult, new_loc: Location) void {
+            self.storage_ordered = false;
             self.length += 1;
             switch (where.dir) {
                 .left, .right => {
@@ -568,6 +631,7 @@ fn InitTreeType(comptime K: type, comptime V: type, comptime Cache: type, compti
         }
 
         fn deleteLocation(self: *Self, loc: Location) void {
+            self.storage_ordered = false;
             self.deleteAndReplace(loc);
             self.lc.destroy(loc);
         }
@@ -1348,19 +1412,19 @@ fn InitTreeType(comptime K: type, comptime V: type, comptime Cache: type, compti
             return p <= 8;
         }
 
-        // locateAt returns the node at sorted position pos. With countChildren it
-        // descends by comparing pos with left subtree sizes; without counts it
-        // falls back to iterator-style movement from the nearest end.
-        fn locateAt(self: *Self, pos: usize) Location {
-            if (pos >= self.len()) {
-                @panic("index out of range");
+        fn locateAtOrdered(self: *Self, pos: usize) Location {
+            return self.lc.locationAt(pos);
+        }
+
+        fn locateAtLinearly(self: *Self, pos: usize) Location {
+            if (pos < self.length / 2) {
+                return self.advance(self.min.?, @as(isize, @intCast(pos)));
             }
-            if (!options.countChildren or self.shouldLocateAtLinearly(pos)) {
-                if (pos < self.length / 2) {
-                    return self.advance(self.min.?, @as(isize, @intCast(pos)));
-                }
-                return self.advance(self.max.?, -@as(isize, @intCast(self.length - pos - 1)));
-            }
+            return self.advance(self.max.?, -@as(isize, @intCast(self.length - pos - 1)));
+        }
+
+        // locateAtByCount descends by comparing pos with left subtree sizes.
+        fn locateAtByCount(self: *Self, pos: usize) Location {
             var loc = self.root.?;
             var p = pos;
             while (true) {
@@ -1375,6 +1439,23 @@ fn InitTreeType(comptime K: type, comptime V: type, comptime Cache: type, compti
                     loc = self.child(loc, .right).?;
                 }
             }
+        }
+
+        // locateAt returns the node at sorted position pos. Ordered address
+        // storage can resolve the address directly; otherwise the tree uses
+        // count-based descent when available and iterator-style movement when it
+        // is cheaper or the tree was built without counts.
+        fn locateAt(self: *Self, pos: usize) Location {
+            if (pos >= self.len()) {
+                @panic("index out of range");
+            }
+            if (cacheCapabilities.hasOrderedStorage and self.storage_ordered) {
+                return self.locateAtOrdered(pos);
+            }
+            if (options.countChildren and !self.shouldLocateAtLinearly(pos)) {
+                return self.locateAtByCount(pos);
+            }
+            return self.locateAtLinearly(pos);
         }
     };
 }
@@ -1573,6 +1654,71 @@ fn testTreeCompactStorageNoop(comptime options: Options) !void {
 
 test "tree compactStorage is noop for pointer cache" {
     try testTreeCompactStorageNoop(.{ .nodeCacheType = .PointerBased });
+}
+
+fn testTreeOrderStorageByKey(comptime options: Options) !void {
+    const a = std.testing.allocator;
+    const TreeType = TreeWithOptions(i64, i64, i64Cmp, options);
+    var t = try TreeType.init(a);
+    defer t.deinit();
+
+    const inserted_keys = [_]i64{ 8, 3, 12, 1, 6, 10, 14, 0, 2, 5, 7, 9, 11, 13, 15, 4 };
+    for (inserted_keys) |key| {
+        _ = try t.insert(key, key * 10);
+    }
+
+    try std.testing.expectEqual(@as(i64, 10), t.delete(1).?);
+    try std.testing.expectEqual(@as(i64, 60), t.delete(6).?);
+    try std.testing.expectEqual(@as(i64, 120), t.delete(12).?);
+    try std.testing.expectEqual(@as(i64, 140), t.delete(14).?);
+
+    t.orderStorageByKey();
+
+    const expected = [_]i64{ 0, 2, 3, 4, 5, 7, 8, 9, 10, 11, 13, 15 };
+    try std.testing.expectEqual(expected.len, t.len());
+    try std.testing.expectEqual(@as(usize, expected.len), t.lc.slotsLen());
+    try std.testing.expectEqual(@as(usize, 0), t.lc.freeCount());
+    try std.testing.expectEqual(@TypeOf(t.lc).InvalidAddr, t.lc.freeHead());
+
+    for (expected, 0..) |key, idx| {
+        try std.testing.expectEqual(key, t.lc.slotAt(@intCast(idx)).used.data.k);
+        try std.testing.expectEqual(key, t.at(idx).Key);
+        try std.testing.expectEqual(key, t.iteratorAt(idx).value().?.Key);
+    }
+
+    try std.testing.expectEqual(@as(i64, 0), t.getMin().?.Key);
+    try std.testing.expectEqual(@as(i64, 15), t.getMax().?.Key);
+    try std.testing.expectEqual(@as(i64, 100), t.get(10).?.*);
+
+    const deleted = t.deleteAt(4);
+    try std.testing.expectEqual(@as(i64, 5), deleted.Key);
+    try std.testing.expectEqual(@as(i64, 50), deleted.Value);
+    try std.testing.expectEqual(@as(?usize, null), t.rank(5));
+}
+
+test "tree orderStorageByKey orders address caches by sorted key" {
+    try testTreeOrderStorageByKey(.{ .countChildren = false, .nodeCacheType = .ArrayBased });
+    try testTreeOrderStorageByKey(.{ .countChildren = true, .nodeCacheType = .ArrayBased });
+    try testTreeOrderStorageByKey(.{ .countChildren = false, .nodeCacheType = .StableArrayBased });
+    try testTreeOrderStorageByKey(.{ .countChildren = true, .nodeCacheType = .StableArrayBased });
+}
+
+test "tree orderStorageByKey is noop for pointer cache" {
+    const a = std.testing.allocator;
+    const TreeType = TreeWithOptions(i64, i64, i64Cmp, .{ .nodeCacheType = .PointerBased });
+    var t = try TreeType.init(a);
+    defer t.deinit();
+
+    _ = try t.insert(2, 20);
+    _ = try t.insert(1, 10);
+    _ = try t.insert(3, 30);
+
+    t.orderStorageByKey();
+
+    try std.testing.expectEqual(@as(usize, 3), t.len());
+    try std.testing.expectEqual(@as(i64, 1), t.at(0).Key);
+    try std.testing.expectEqual(@as(i64, 2), t.at(1).Key);
+    try std.testing.expectEqual(@as(i64, 3), t.at(2).Key);
 }
 
 test "tree getOrInsert" {

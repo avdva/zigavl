@@ -151,6 +151,14 @@ pub fn LocationCache(comptime K: type, comptime V: type, comptime Tags: type) ty
             return if (new_anchor) |addr| Location.init(addr) else null;
         }
 
+        pub fn relocate(self: *Self, loc: Location, pos: usize) Location {
+            return Location.init(address_storage.relocate(self, loc.addr, @intCast(pos)));
+        }
+
+        pub fn locationAt(_: *Self, pos: usize) Location {
+            return Location.init(@intCast(pos));
+        }
+
         pub fn slotsLen(self: *Self) usize {
             return self.nodes.items.len;
         }
@@ -173,6 +181,12 @@ pub fn LocationCache(comptime K: type, comptime V: type, comptime Tags: type) ty
                 self.nodes.expandToCapacity();
             }
             self.nodes.shrinkAndFree(self.a, used_count + new_free_count);
+            self.nodes.shrinkRetainingCapacity(used_count);
+            self.free_count = 0;
+            self.free_head = InvalidAddr;
+        }
+
+        pub fn finishOrderStorage(self: *Self, used_count: usize) void {
             self.nodes.shrinkRetainingCapacity(used_count);
             self.free_count = 0;
             self.free_head = InvalidAddr;
