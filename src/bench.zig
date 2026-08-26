@@ -22,10 +22,12 @@ fn makeKeys(a: std.mem.Allocator, n: usize, shuffle: bool) ![]i64 {
 
 fn report(name: []const u8, ops: usize, elapsed_ns: u64, checksum: i64) void {
     const ns_per_op = if (ops == 0) 0 else elapsed_ns / ops;
-    std.debug.print("{s}: {d} ops, {d} ns/op, checksum={d}\n", .{
+    const ps_per_op = if (ops == 0) 0 else elapsed_ns * 1000 / ops;
+    std.debug.print("{s}: {d} ops, {d} ns/op, {d} ps/op, checksum={d}\n", .{
         name,
         ops,
         ns_per_op,
+        ps_per_op,
         checksum,
     });
 }
@@ -231,6 +233,27 @@ fn benchIterator(comptime name: []const u8, comptime options: zigavl.Options, a:
     report(name ++ "/iterate/ascending", bench_len, nowNs() - start, checksum);
 }
 
+fn benchIteratorOrdered(comptime name: []const u8, comptime options: zigavl.Options, a: std.mem.Allocator) !void {
+    const Tree = zigavl.TreeWithOptions(i64, i64, i64Cmp, options);
+    var tree = try Tree.init(a);
+    defer tree.deinit();
+
+    for (0..bench_len) |idx| {
+        const key: i64 = @intCast(idx);
+        _ = try tree.insert(key, key);
+    }
+    tree.orderStorageByKey();
+
+    var checksum: i64 = 0;
+    const start = nowNs();
+    var it = tree.iteratorAtFirst();
+    while (it.value()) |entry| {
+        checksum += entry.Value.*;
+        it.next();
+    }
+    report(name ++ "/iterate/ordered-ascending", bench_len, nowNs() - start, checksum);
+}
+
 fn benchAtCountChildren(comptime name: []const u8, comptime options: zigavl.Options, a: std.mem.Allocator) !void {
     const Tree = zigavl.TreeWithOptions(i64, i64, i64Cmp, options);
     var tree = try Tree.init(a);
@@ -246,7 +269,45 @@ fn benchAtCountChildren(comptime name: []const u8, comptime options: zigavl.Opti
     for (0..bench_len) |idx| {
         checksum += tree.at(idx).Value.*;
     }
-    report(name ++ "/at/countChildren", bench_len, nowNs() - start, checksum);
+    report(name ++ "/at/logarithmic", bench_len, nowNs() - start, checksum);
+}
+
+fn benchAtOrdered(comptime name: []const u8, comptime options: zigavl.Options, a: std.mem.Allocator) !void {
+    const Tree = zigavl.TreeWithOptions(i64, i64, i64Cmp, options);
+    var tree = try Tree.init(a);
+    defer tree.deinit();
+
+    for (0..bench_len) |idx| {
+        const key: i64 = @intCast(idx);
+        _ = try tree.insert(key, key);
+    }
+    tree.orderStorageByKey();
+
+    var checksum: i64 = 0;
+    const start = nowNs();
+    for (0..bench_len) |idx| {
+        checksum += tree.at(idx).Value.*;
+    }
+    report(name ++ "/at/ordered", bench_len, nowNs() - start, checksum);
+}
+
+fn benchAtOrderedIncludingOrder(comptime name: []const u8, comptime options: zigavl.Options, a: std.mem.Allocator) !void {
+    const Tree = zigavl.TreeWithOptions(i64, i64, i64Cmp, options);
+    var tree = try Tree.init(a);
+    defer tree.deinit();
+
+    for (0..bench_len) |idx| {
+        const key: i64 = @intCast(idx);
+        _ = try tree.insert(key, key);
+    }
+
+    var checksum: i64 = 0;
+    const start = nowNs();
+    tree.orderStorageByKey();
+    for (0..bench_len) |idx| {
+        checksum += tree.at(idx).Value.*;
+    }
+    report(name ++ "/at/ordered-including-order", bench_len, nowNs() - start, checksum);
 }
 
 fn benchTree(comptime name: []const u8, comptime options: zigavl.Options, a: std.mem.Allocator, random_keys: []const i64) !void {
@@ -263,6 +324,11 @@ fn benchTree(comptime name: []const u8, comptime options: zigavl.Options, a: std
         .countChildren = true,
         .nodeCacheType = options.nodeCacheType,
     }, a);
+    if (options.nodeCacheType != .PointerBased) {
+        try benchIteratorOrdered(name, options, a);
+        try benchAtOrdered(name, options, a);
+        try benchAtOrderedIncludingOrder(name, options, a);
+    }
 }
 
 pub fn main() !void {

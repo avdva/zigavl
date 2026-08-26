@@ -45,6 +45,7 @@ pub fn initWithOptions(a: std.mem.Allocator, io: InitOptions) !Self
 pub fn deinit()
 pub fn clear(self: *Self) void
 pub fn compactStorage(self: *Self) void
+pub fn orderStorageByKey(self: *Self) void
 
 // insert:
 pub fn insert(self: *Self, k: K, v: V) !InsertResult
@@ -91,6 +92,7 @@ Notes:
 - `nodeCacheType = .ArrayBased` stores tree nodes in an array-backed free-list cache instead of allocating each node separately. Future insertions may reallocate storage and invalidate previously returned value pointers.
 - `nodeCacheType = .StableArrayBased` stores tree nodes in fixed-size chunks. It keeps returned value pointers stable across future insertions, while memory usage can grow to the peak node count until `compactStorage`, `clear`, or `deinit`.
 - `compactStorage()` compacts address-based caches after deletions. `.ArrayBased` can shrink its backing array and `.StableArrayBased` can free unused tail chunks; `.PointerBased` treats it as a no-op.
+- `orderStorageByKey()` orders address-based cache storage by sorted key order. It is useful when a tree is built or bulk-mutated first and then queried many times by sorted position. After it succeeds, `at`, `iteratorAt`, and `deleteAt` resolve positions in `O(1)`, and iterator `next`/`prev` steps can advance through adjacent storage slots until the next structural mutation. The reordering itself is `O(n)`, and it may invalidate existing iterators, locations, entries, and value pointers.
 - `clear()` removes all elements and releases node storage owned by the tree. Complexity depends on storage backend: `O(n)` for `.PointerBased`, `O(1)` for `.ArrayBased`, and `O(number_of_chunks)` for `.StableArrayBased`.
 - `Entry.Value` points into the tree and can be used to update the stored value. `KV.Value` is an owned value copied out from a deleted node.
 - Iterators are valid only for the tree that created them. If the node pointed to by an iterator is deleted, that iterator becomes invalid; use the iterator returned by `deleteIterator`.
@@ -201,6 +203,10 @@ Run the basic benchmark suite with:
 ```sh
 zig build bench -Doptimize=ReleaseFast
 ```
+
+The suite includes positional lookup benchmarks for the regular `O(logn)`
+count-based path, the `O(1)` ordered-storage path, and the ordered-storage path
+including the one-time `orderStorageByKey()` cost.
 
 ## Contact
 

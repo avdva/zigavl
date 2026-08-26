@@ -63,6 +63,14 @@ pub fn swapAtAddresses(cache: anytype, addr_1: Address, addr_2: Address) void {
     updateLinks(cache, addr_1, addr_2);
 }
 
+pub fn relocate(cache: anytype, addr: Address, target_addr: Address) Address {
+    if (addr == InvalidAddr or addr == target_addr) {
+        return addr;
+    }
+    swapAtAddresses(cache, addr, target_addr);
+    return target_addr;
+}
+
 fn updateLinks(cache: anytype, addr: Address, new_addr: Address) void {
     const node_ptr = &cache.slotAt(new_addr).used;
     if (node_ptr.left != InvalidAddr) {
