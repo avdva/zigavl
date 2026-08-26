@@ -195,6 +195,15 @@ pub fn LocationCache(comptime K: type, comptime V: type, comptime Tags: type) ty
             return Location.init(@intCast(pos));
         }
 
+        pub fn nextLocation(_: *Self, loc: Location, len: usize) ?Location {
+            const next_addr = loc.addr + 1;
+            return if (next_addr < len) Location.init(next_addr) else null;
+        }
+
+        pub fn prevLocation(_: *Self, loc: Location) ?Location {
+            return if (loc.addr > 0) Location.init(loc.addr - 1) else null;
+        }
+
         pub fn slotsLen(self: *Self) usize {
             return self.len;
         }

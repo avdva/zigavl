@@ -97,7 +97,9 @@ fn InitTreeType(comptime K: type, comptime V: type, comptime Cache: type, compti
             .hasCompactStorage = @hasDecl(Cache, "reclaim"),
             .hasOrderedStorage = @hasDecl(Cache, "relocate") and
                 @hasDecl(Cache, "finishOrderStorage") and
-                @hasDecl(Cache, "locationAt"),
+                @hasDecl(Cache, "locationAt") and
+                @hasDecl(Cache, "nextLocation") and
+                @hasDecl(Cache, "prevLocation"),
         };
 
         const LocateResult = struct {
@@ -370,13 +372,13 @@ fn InitTreeType(comptime K: type, comptime V: type, comptime Cache: type, compti
 
             pub fn next(self: *Iterator) void {
                 if (self.loc) |l| {
-                    self.loc = self.tree.nextInOrderLocation(l);
+                    self.loc = self.tree.nextIteratorLocation(l);
                 }
             }
 
             pub fn prev(self: *Iterator) void {
                 if (self.loc) |l| {
-                    self.loc = self.tree.prevInOrderLocation(l);
+                    self.loc = self.tree.prevIteratorLocation(l);
                 }
             }
 
@@ -490,7 +492,7 @@ fn InitTreeType(comptime K: type, comptime V: type, comptime Cache: type, compti
             }
             if (self.length == 0) {
                 self.lc.finishOrderStorage(0);
-                self.storage_ordered = true;
+                self.storage_ordered = false;
                 return;
             }
 
@@ -1410,6 +1412,24 @@ fn InitTreeType(comptime K: type, comptime V: type, comptime Cache: type, compti
             return self.lc.locationAt(pos);
         }
 
+        fn nextIteratorLocation(self: *Self, loc: Location) ?Location {
+            if (comptime cacheCapabilities.hasOrderedStorage) {
+                if (self.storage_ordered) {
+                    return self.lc.nextLocation(loc, self.length);
+                }
+            }
+            return self.nextInOrderLocation(loc);
+        }
+
+        fn prevIteratorLocation(self: *Self, loc: Location) ?Location {
+            if (comptime cacheCapabilities.hasOrderedStorage) {
+                if (self.storage_ordered) {
+                    return self.lc.prevLocation(loc);
+                }
+            }
+            return self.prevInOrderLocation(loc);
+        }
+
         fn locateAtLinearly(self: *Self, pos: usize) Location {
             if (pos < self.length / 2) {
                 return self.advance(self.min.?, @as(isize, @intCast(pos)));
@@ -1443,8 +1463,10 @@ fn InitTreeType(comptime K: type, comptime V: type, comptime Cache: type, compti
             if (pos >= self.len()) {
                 @panic("index out of range");
             }
-            if (cacheCapabilities.hasOrderedStorage and self.storage_ordered) {
-                return self.locateAtOrdered(pos);
+            if (comptime cacheCapabilities.hasOrderedStorage) {
+                if (self.storage_ordered) {
+                    return self.locateAtOrdered(pos);
+                }
             }
             if (options.countChildren and !self.shouldLocateAtLinearly(pos)) {
                 return self.locateAtByCount(pos);
@@ -1679,6 +1701,22 @@ fn testTreeOrderStorageByKey(comptime options: Options) !void {
         try std.testing.expectEqual(key, t.at(idx).Key);
         try std.testing.expectEqual(key, t.iteratorAt(idx).value().?.Key);
     }
+
+    var it = t.iteratorAtFirst();
+    for (expected) |key| {
+        try std.testing.expectEqual(key, it.value().?.Key);
+        it.next();
+    }
+    try std.testing.expectEqual(@as(?TreeType.Entry, null), it.value());
+
+    it = t.iteratorAtLast();
+    var rev_idx = expected.len;
+    while (rev_idx > 0) {
+        rev_idx -= 1;
+        try std.testing.expectEqual(expected[rev_idx], it.value().?.Key);
+        it.prev();
+    }
+    try std.testing.expectEqual(@as(?TreeType.Entry, null), it.value());
 
     try std.testing.expectEqual(@as(i64, 0), t.getMin().?.Key);
     try std.testing.expectEqual(@as(i64, 15), t.getMax().?.Key);
