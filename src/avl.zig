@@ -596,7 +596,9 @@ fn InitTreeType(comptime K: type, comptime V: type, comptime Cache: type, compti
         }
 
         fn insertNew(self: *Self, where: LocateResult, new_loc: Location) void {
-            self.storage_ordered = false;
+            if (comptime cacheCapabilities.hasOrderedStorage) {
+                self.storage_ordered = false;
+            }
             self.length += 1;
             switch (where.dir) {
                 .left, .right => {
@@ -627,7 +629,9 @@ fn InitTreeType(comptime K: type, comptime V: type, comptime Cache: type, compti
         }
 
         fn deleteLocation(self: *Self, loc: Location) void {
-            self.storage_ordered = false;
+            if (comptime cacheCapabilities.hasOrderedStorage) {
+                self.storage_ordered = false;
+            }
             self.deleteAndReplace(loc);
             self.lc.destroy(loc);
         }

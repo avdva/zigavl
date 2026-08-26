@@ -151,19 +151,28 @@ pub fn LocationCache(comptime K: type, comptime V: type, comptime Tags: type) ty
             return if (new_anchor) |addr| Location.init(addr) else null;
         }
 
+        // relocate moves the occupied slot addressed by loc to address pos,
+        // updating all address links touched by the move. It returns the new
+        // Location of that same node.
         pub fn relocate(self: *Self, loc: Location, pos: usize) Location {
             return Location.init(address_storage.relocate(self, loc.addr, @intCast(pos)));
         }
 
+        // locationAt converts a storage address to a Location handle. Callers are
+        // responsible for only passing addresses known to contain occupied slots.
         pub fn locationAt(_: *Self, pos: usize) Location {
             return Location.init(@intCast(pos));
         }
 
+        // nextLocation returns the handle for the next storage slot when the
+        // caller treats a dense slot range as an ordered sequence.
         pub fn nextLocation(_: *Self, loc: Location, len: usize) ?Location {
             const next_addr = loc.addr + 1;
             return if (next_addr < len) Location.init(next_addr) else null;
         }
 
+        // prevLocation returns the handle for the previous storage slot when the
+        // caller treats a dense slot range as an ordered sequence.
         pub fn prevLocation(_: *Self, loc: Location) ?Location {
             return if (loc.addr > 0) Location.init(loc.addr - 1) else null;
         }
@@ -184,6 +193,11 @@ pub fn LocationCache(comptime K: type, comptime V: type, comptime Tags: type) ty
             return &self.nodes.items[addr];
         }
 
+        // finishReclaim finalizes address compaction for ArrayList-backed
+        // storage. The shared compaction code has already moved occupied slots
+        // into the retained prefix; this method shrinks allocation according to
+        // new_free_count, trims the logical length to used slots, and clears the
+        // free-list metadata because reclaimed free slots no longer exist.
         pub fn finishReclaim(self: *Self, new_free_count: usize) void {
             const used_count = self.nodes.items.len - self.free_count;
             if (used_count == 0 and self.nodes.items.len == 0 and self.nodes.capacity > 0) {
@@ -195,6 +209,9 @@ pub fn LocationCache(comptime K: type, comptime V: type, comptime Tags: type) ty
             self.free_head = InvalidAddr;
         }
 
+        // finishOrderStorage trims the logical slot list to the occupied prefix
+        // after every live node has been moved into sorted address order. Free
+        // slots are gone, but retained capacity can still be reused by append().
         pub fn finishOrderStorage(self: *Self, used_count: usize) void {
             self.nodes.shrinkRetainingCapacity(used_count);
             self.free_count = 0;
