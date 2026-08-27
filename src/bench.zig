@@ -310,6 +310,25 @@ fn benchAtOrderedIncludingOrder(comptime name: []const u8, comptime options: zig
     report(name ++ "/at/ordered-including-order", bench_len, nowNs() - start, checksum);
 }
 
+fn benchGetOrderedStorage(comptime name: []const u8, comptime options: zigavl.Options, a: std.mem.Allocator, keys: []const i64) !void {
+    const Tree = zigavl.TreeWithOptions(i64, i64, i64Cmp, options);
+    var tree = try Tree.init(a);
+    defer tree.deinit();
+
+    for (0..bench_len) |idx| {
+        const key: i64 = @intCast(idx);
+        _ = try tree.insert(key, key);
+    }
+    tree.orderStorageByKey();
+
+    var checksum: i64 = 0;
+    const start = nowNs();
+    for (keys) |key| {
+        checksum += tree.get(key).?.*;
+    }
+    report(name ++ "/get/ordered-storage", keys.len, nowNs() - start, checksum);
+}
+
 fn benchTree(comptime name: []const u8, comptime options: zigavl.Options, a: std.mem.Allocator, random_keys: []const i64) !void {
     try benchSequentialInsert(name, options, a);
     try benchRandomInsert(name, options, a, random_keys);
@@ -328,6 +347,7 @@ fn benchTree(comptime name: []const u8, comptime options: zigavl.Options, a: std
         try benchIteratorOrdered(name, options, a);
         try benchAtOrdered(name, options, a);
         try benchAtOrderedIncludingOrder(name, options, a);
+        try benchGetOrderedStorage(name, options, a, random_keys);
     }
 }
 
