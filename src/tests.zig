@@ -1,14 +1,16 @@
 const std = @import("std");
-const math = std.math;
 const lib = @import("lib.zig");
 
-fn i64Cmp(a: i64, b: i64) math.Order {
-    return math.order(a, b);
+fn i64Cmp(a: i64, b: i64) std.math.Order {
+    return std.math.order(a, b);
 }
 
-test "test pub decls" {
+test "test public declarations" {
     const a = std.testing.allocator;
-    const TreeType = lib.Tree(i64, i64, i64Cmp);
+    const TreeType = lib.TreeWithOptions(i64, i64, i64Cmp, lib.Options{
+        .countChildren = false,
+        .nodeCacheType = lib.NodeCacheType.ArrayBased,
+    });
     const options = lib.InitOptions{
         .allowFastDeinit = .auto,
     };
