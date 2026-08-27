@@ -886,10 +886,33 @@ fn InitTreeType(comptime K: type, comptime V: type, comptime Cache: type, compti
         // get returns a value for key k.
         // Time complexity: O(logn).
         pub fn get(self: *Self, k: K) ?*V {
+            if (comptime cacheCapabilities.hasOrderedStorage) {
+                if (self.storage_ordered) {
+                    return self.getInOrderedStorage(k);
+                }
+            }
             const res = self.locate(k);
             if (res.dir == .center) {
                 if (res.loc) |loc| {
                     return &self.data(loc).v;
+                }
+            }
+            return null;
+        }
+
+        // getInOrderedStorage performs binary search on the dense storage prefix directly. It is
+        // valid only while storage addresses follow key order.
+        fn getInOrderedStorage(self: *Self, k: K) ?*V {
+            var left: usize = 0;
+            var right = self.length;
+            while (left < right) {
+                const mid = left + (right - left) / 2;
+                const loc = self.lc.locationAt(mid);
+                const data_ptr = self.data(loc);
+                switch (Comparer(k, data_ptr.k)) {
+                    .lt => right = mid,
+                    .eq => return &data_ptr.v,
+                    .gt => left = mid + 1,
                 }
             }
             return null;
@@ -1725,6 +1748,7 @@ fn testTreeOrderStorageByKey(comptime options: Options) !void {
     try std.testing.expectEqual(@as(i64, 0), t.getMin().?.Key);
     try std.testing.expectEqual(@as(i64, 15), t.getMax().?.Key);
     try std.testing.expectEqual(@as(i64, 100), t.get(10).?.*);
+    try std.testing.expectEqual(@as(?*i64, null), t.get(6));
 
     const deleted = t.deleteAt(4);
     try std.testing.expectEqual(@as(i64, 5), deleted.Key);
