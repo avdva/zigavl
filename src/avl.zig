@@ -79,8 +79,23 @@ fn InitTreeType(comptime K: type, comptime V: type, comptime Cache: type, compti
             return self.lc.eq(lhs, rhs);
         }
 
-        fn data(self: *Self, loc: Location) *Location.NodeData {
-            return self.lc.data(loc);
+        fn keyPtr(self: *Self, loc: Location) *K {
+            return self.lc.keyPtr(loc);
+        }
+
+        fn valuePtr(self: *Self, loc: Location) *V {
+            return self.lc.valuePtr(loc);
+        }
+
+        fn meta(self: *Self, loc: Location) Cache.Meta {
+            return self.lc.meta(loc);
+        }
+
+        fn setHeight(self: *Self, loc: Location, height: u8) bool {
+            const height_ptr = self.meta(loc).height;
+            const old = height_ptr.*;
+            height_ptr.* = height;
+            return old != height;
         }
 
         fn child(self: *Self, loc: Location, comptime dir: direction) ?Location {
@@ -268,12 +283,12 @@ fn InitTreeType(comptime K: type, comptime V: type, comptime Cache: type, compti
         fn recalcCounts(self: *Self, loc: Location) void {
             var count: u32 = 0;
             if (self.child(loc, .left)) |left| {
-                count += 1 + self.data(left).tags.childrenCount;
+                count += 1 + self.meta(left).tags.childrenCount;
             }
             if (self.child(loc, .right)) |right| {
-                count += 1 + self.data(right).tags.childrenCount;
+                count += 1 + self.meta(right).tags.childrenCount;
             }
-            self.data(loc).tags.childrenCount = count;
+            self.meta(loc).tags.childrenCount = count;
         }
 
         // updateCounts walks from loc to the root after a structural change that
@@ -291,7 +306,7 @@ fn InitTreeType(comptime K: type, comptime V: type, comptime Cache: type, compti
         // use it to skip whole left subtrees without walking them.
         fn leftCount(self: *Self, loc: Location) usize {
             if (self.child(loc, .left)) |left| {
-                return 1 + self.data(left).tags.childrenCount;
+                return 1 + self.meta(left).tags.childrenCount;
             }
             return 0;
         }
@@ -302,21 +317,21 @@ fn InitTreeType(comptime K: type, comptime V: type, comptime Cache: type, compti
         fn recalcHeight(self: *Self, loc: Location) bool {
             var h: u8 = 0;
             if (self.child(loc, .left)) |l| {
-                h = 1 + self.data(l).h;
+                h = 1 + self.meta(l).height.*;
             }
             if (self.child(loc, .right)) |r| {
-                h = @max(h, 1 + self.data(r).h);
+                h = @max(h, 1 + self.meta(r).height.*);
             }
-            return self.data(loc).setHeight(h);
+            return self.setHeight(loc, h);
         }
 
         fn balance(self: *Self, loc: Location) i8 {
             var b: i8 = 0;
             if (self.child(loc, .right)) |right| {
-                b += 1 + @as(i8, @intCast(self.data(right).h));
+                b += 1 + @as(i8, @intCast(self.meta(right).height.*));
             }
             if (self.child(loc, .left)) |left| {
-                b -= 1 + @as(i8, @intCast(self.data(left).h));
+                b -= 1 + @as(i8, @intCast(self.meta(left).height.*));
             }
             return b;
         }
@@ -347,10 +362,9 @@ fn InitTreeType(comptime K: type, comptime V: type, comptime Cache: type, compti
 
             pub fn value(self: *const Iterator) ?Entry {
                 if (self.loc) |l| {
-                    const data_ptr = self.tree.data(l);
                     return Entry{
-                        .Key = data_ptr.k,
-                        .Value = &data_ptr.v,
+                        .Key = self.tree.keyPtr(l).*,
+                        .Value = self.tree.valuePtr(l),
                     };
                 }
                 return null;
@@ -482,13 +496,14 @@ fn InitTreeType(comptime K: type, comptime V: type, comptime Cache: type, compti
 
         fn createNewNode(self: *Self, k: ?K, v: ?V) !Location {
             const new_loc = try self.lc.create();
-            const data_ptr = self.data(new_loc);
-            data_ptr.*.tags = .{};
+            const m = self.meta(new_loc);
+            m.tags.* = .{};
+            m.height.* = 0;
             if (k) |kVal| {
-                data_ptr.*.k = kVal;
+                self.keyPtr(new_loc).* = kVal;
             }
             if (v) |vVal| {
-                data_ptr.*.v = vVal;
+                self.valuePtr(new_loc).* = vVal;
             }
             return new_loc;
         }
@@ -511,16 +526,16 @@ fn InitTreeType(comptime K: type, comptime V: type, comptime Cache: type, compti
                 if (res.dir == .center) {
                     return InsertResult{
                         .inserted = false,
-                        .v = &self.data(l).v,
+                        .v = self.valuePtr(l),
                     };
                 }
             }
             const new_loc = try self.createNewNode(k, null);
-            ctor(&self.data(new_loc).v, args);
+            ctor(self.valuePtr(new_loc), args);
             self.insertNew(res, new_loc);
             return InsertResult{
                 .inserted = true,
-                .v = &self.data(new_loc).v,
+                .v = self.valuePtr(new_loc),
             };
         }
 
@@ -542,11 +557,11 @@ fn InitTreeType(comptime K: type, comptime V: type, comptime Cache: type, compti
             if (res.loc) |l| {
                 if (res.dir == .center) {
                     if (updateExisting) {
-                        self.data(l).v = v;
+                        self.valuePtr(l).* = v;
                     }
                     return InsertResult{
                         .inserted = false,
-                        .v = &self.data(l).v,
+                        .v = self.valuePtr(l),
                     };
                 }
             }
@@ -554,7 +569,7 @@ fn InitTreeType(comptime K: type, comptime V: type, comptime Cache: type, compti
             self.insertNew(res, new_loc);
             return InsertResult{
                 .inserted = true,
-                .v = &self.data(new_loc).v,
+                .v = self.valuePtr(new_loc),
             };
         }
 
@@ -604,12 +619,12 @@ fn InitTreeType(comptime K: type, comptime V: type, comptime Cache: type, compti
         // ordering and avoids delete+insert work.
         fn canUpdateKeyInPlace(self: *Self, loc: Location, new_key: K) bool {
             if (self.prevInOrderLocation(loc)) |prev| {
-                if (Comparer(self.data(prev).k, new_key) != .lt) {
+                if (Comparer(self.keyPtr(prev).*, new_key) != .lt) {
                     return false;
                 }
             }
             if (self.nextInOrderLocation(loc)) |next| {
-                if (Comparer(new_key, self.data(next).k) != .lt) {
+                if (Comparer(new_key, self.keyPtr(next).*) != .lt) {
                     return false;
                 }
             }
@@ -622,11 +637,11 @@ fn InitTreeType(comptime K: type, comptime V: type, comptime Cache: type, compti
             self.setChild(&mut_loc, .right, null);
             self.setParent(&mut_loc, null);
 
-            const data_ptr = self.data(loc);
-            data_ptr.* = Location.NodeData{};
-            data_ptr.*.tags = .{};
-            data_ptr.*.k = k;
-            data_ptr.*.v = v;
+            const m = self.meta(loc);
+            m.tags.* = .{};
+            m.height.* = 0;
+            self.keyPtr(loc).* = k;
+            self.valuePtr(loc).* = v;
         }
 
         // updateKey changes a node key while preserving its value.
@@ -639,32 +654,31 @@ fn InitTreeType(comptime K: type, comptime V: type, comptime Cache: type, compti
                 return null;
             }
             const old_loc = old_res.loc orelse return null;
-            const old_data = self.data(old_loc);
 
-            if (Comparer(old_data.k, new_key) == .eq) {
-                old_data.k = new_key;
-                return &old_data.v;
+            if (Comparer(self.keyPtr(old_loc).*, new_key) == .eq) {
+                self.keyPtr(old_loc).* = new_key;
+                return self.valuePtr(old_loc);
             }
 
             const new_res = self.locate(new_key);
             if (new_res.dir == .center) {
                 const new_loc = new_res.loc orelse unreachable;
-                const old_value = old_data.v;
-                self.data(new_loc).v = old_value;
+                const old_value = self.valuePtr(old_loc).*;
+                self.valuePtr(new_loc).* = old_value;
                 self.deleteLocation(old_loc);
-                return &self.data(new_loc).v;
+                return self.valuePtr(new_loc);
             }
 
             if (self.canUpdateKeyInPlace(old_loc, new_key)) {
-                old_data.k = new_key;
-                return &old_data.v;
+                self.keyPtr(old_loc).* = new_key;
+                return self.valuePtr(old_loc);
             }
 
-            const old_value = old_data.v;
+            const old_value = self.valuePtr(old_loc).*;
             self.deleteAndReplace(old_loc);
             self.resetDetachedLocation(old_loc, new_key, old_value);
             self.insertNew(new_res, old_loc);
-            return &self.data(old_loc).v;
+            return self.valuePtr(old_loc);
         }
 
         // delete deletes a node from the tree.
@@ -676,7 +690,7 @@ fn InitTreeType(comptime K: type, comptime V: type, comptime Cache: type, compti
                 return null;
             }
             const l = res.loc orelse return null;
-            const v = self.data(l).v;
+            const v = self.valuePtr(l).*;
             self.deleteLocation(l);
             return v;
         }
@@ -757,10 +771,9 @@ fn InitTreeType(comptime K: type, comptime V: type, comptime Cache: type, compti
         // Time complexity: O(1).
         pub fn getMin(self: *Self) ?Entry {
             if (self.min) |min| {
-                const data_ptr = self.data(min);
                 return Entry{
-                    .Key = data_ptr.k,
-                    .Value = &data_ptr.v,
+                    .Key = self.keyPtr(min).*,
+                    .Value = self.valuePtr(min),
                 };
             }
             return null;
@@ -770,10 +783,9 @@ fn InitTreeType(comptime K: type, comptime V: type, comptime Cache: type, compti
         // Time complexity: O(1).
         pub fn getMax(self: *Self) ?Entry {
             if (self.max) |max| {
-                const data_ptr = self.data(max);
                 return Entry{
-                    .Key = data_ptr.k,
-                    .Value = &data_ptr.v,
+                    .Key = self.keyPtr(max).*,
+                    .Value = self.valuePtr(max),
                 };
             }
             return null;
@@ -797,7 +809,7 @@ fn InitTreeType(comptime K: type, comptime V: type, comptime Cache: type, compti
             var loc = self.root;
             var candidate: ?Location = null;
             while (loc) |l| {
-                switch (Comparer(k, self.data(l).k)) {
+                switch (Comparer(k, self.keyPtr(l).*)) {
                     .lt => {
                         candidate = l;
                         loc = self.child(l, .left);
@@ -820,7 +832,7 @@ fn InitTreeType(comptime K: type, comptime V: type, comptime Cache: type, compti
             var loc = self.root;
             var candidate: ?Location = null;
             while (loc) |l| {
-                switch (Comparer(k, self.data(l).k)) {
+                switch (Comparer(k, self.keyPtr(l).*)) {
                     .lt => {
                         candidate = l;
                         loc = self.child(l, .left);
@@ -857,7 +869,7 @@ fn InitTreeType(comptime K: type, comptime V: type, comptime Cache: type, compti
             const res = self.locate(k);
             if (res.dir == .center) {
                 if (res.loc) |loc| {
-                    return &self.data(loc).v;
+                    return self.valuePtr(loc);
                 }
             }
             return null;
@@ -871,10 +883,9 @@ fn InitTreeType(comptime K: type, comptime V: type, comptime Cache: type, compti
             while (left < right) {
                 const mid = left + (right - left) / 2;
                 const loc = self.lc.locationAt(mid);
-                const data_ptr = self.data(loc);
-                switch (Comparer(k, data_ptr.k)) {
+                switch (Comparer(k, self.keyPtr(loc).*)) {
                     .lt => right = mid,
-                    .eq => return &data_ptr.v,
+                    .eq => return self.valuePtr(loc),
                     .gt => left = mid + 1,
                 }
             }
@@ -901,7 +912,7 @@ fn InitTreeType(comptime K: type, comptime V: type, comptime Cache: type, compti
             var loc = self.root;
             var result: usize = 0;
             while (loc) |l| {
-                switch (Comparer(k, self.data(l).k)) {
+                switch (Comparer(k, self.keyPtr(l).*)) {
                     .lt => {
                         loc = self.child(l, .left);
                     },
@@ -1024,7 +1035,7 @@ fn InitTreeType(comptime K: type, comptime V: type, comptime Cache: type, compti
                 return null;
             }
             while (loc) |l| {
-                switch (Comparer(k, self.data(l).k)) {
+                switch (Comparer(k, self.keyPtr(l).*)) {
                     .lt => {
                         if (self.locEq(loc.?, self.min.?)) {
                             return null;
@@ -1053,7 +1064,7 @@ fn InitTreeType(comptime K: type, comptime V: type, comptime Cache: type, compti
                 return null;
             }
             while (loc) |l| {
-                switch (Comparer(k, self.data(l).k)) {
+                switch (Comparer(k, self.keyPtr(l).*)) {
                     .lt => {
                         loc = self.child(l, .left);
                         candidate_rank = current_rank + self.leftCount(l);
@@ -1078,10 +1089,9 @@ fn InitTreeType(comptime K: type, comptime V: type, comptime Cache: type, compti
         //  O(n) - otherwise.
         pub fn at(self: *Self, pos: usize) Entry {
             const loc = self.locateAt(pos);
-            const data_ptr = self.data(loc);
             return Entry{
-                .Key = data_ptr.k,
-                .Value = &data_ptr.v,
+                .Key = self.keyPtr(loc).*,
+                .Value = self.valuePtr(loc),
             };
         }
 
@@ -1108,10 +1118,9 @@ fn InitTreeType(comptime K: type, comptime V: type, comptime Cache: type, compti
         //  O(n) - otherwise.
         pub fn deleteAt(self: *Self, pos: usize) KV {
             const loc = self.locateAt(pos);
-            const data_ptr = self.data(loc);
             const kv = KV{
-                .Key = data_ptr.k,
-                .Value = data_ptr.v,
+                .Key = self.keyPtr(loc).*,
+                .Value = self.valuePtr(loc).*,
             };
             self.deleteLocation(loc);
             return kv;
@@ -1368,7 +1377,7 @@ fn InitTreeType(comptime K: type, comptime V: type, comptime Cache: type, compti
             while (true) {
                 const l = result.loc orelse break;
                 var next: ?Location = null;
-                switch (Comparer(k, self.data(l).k)) {
+                switch (Comparer(k, self.keyPtr(l).*)) {
                     .lt => {
                         next = self.child(l, .left);
                         result.dir = .left;
@@ -2586,6 +2595,7 @@ fn TestLocationCache(comptime underlying: type) type {
     return struct {
         const Self = @This();
         pub const Location = underlying.Location;
+        pub const Meta = underlying.Meta;
 
         u: underlying,
 
@@ -2619,8 +2629,16 @@ fn TestLocationCache(comptime underlying: type) type {
             return self.u.eq(lhs, rhs);
         }
 
-        pub fn data(self: *Self, loc: Location) *Location.NodeData {
-            return self.u.data(loc);
+        pub fn keyPtr(self: *Self, loc: Location) *i64 {
+            return self.u.keyPtr(loc);
+        }
+
+        pub fn valuePtr(self: *Self, loc: Location) *i64 {
+            return self.u.valuePtr(loc);
+        }
+
+        pub fn meta(self: *Self, loc: Location) Meta {
+            return self.u.meta(loc);
         }
 
         pub fn child(self: *Self, loc: Location, comptime dir: direction) ?Location {
@@ -2708,7 +2726,7 @@ fn recalcHeightAndBalance(comptime T: type, tree: *T, loc: ?T.Location) !recalcR
         result.height = @max(result.height, 1 + rRes.height);
         result.r_count = rRes.r_count + rRes.l_count + 1;
     }
-    try std.testing.expectEqual(result.height, tree.data(l).h);
+    try std.testing.expectEqual(result.height, tree.meta(l).height.*);
     if (tree.balance(l) < -1 or tree.balance(l) > 1) {
         return error{
             InvalidBalance,

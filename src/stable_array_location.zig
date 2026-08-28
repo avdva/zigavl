@@ -10,13 +10,13 @@ pub fn LocationCache(comptime K: type, comptime V: type, comptime Tags: type) ty
 
         pub const Address = address_storage.Address;
         pub const InvalidAddr = address_storage.InvalidAddr;
+        const NodeData = node_lib.MakeDataType(K, V, Tags);
 
         // Location is a compact stable handle into this cache.
         // It stores only a logical address, so tree nodes can refer to each other
         // without embedding pointers. Storage access always goes through the cache.
         pub const Location = struct {
             const Loc = @This();
-            pub const NodeData = node_lib.MakeDataType(K, V, Tags);
 
             addr: Address,
 
@@ -28,14 +28,14 @@ pub fn LocationCache(comptime K: type, comptime V: type, comptime Tags: type) ty
         };
 
         const Node = struct {
-            data: Location.NodeData,
+            data: NodeData,
             left: Address,
             right: Address,
             parent: Address,
 
             fn init() Node {
                 return Node{
-                    .data = Location.NodeData{},
+                    .data = NodeData{},
                     .left = InvalidAddr,
                     .right = InvalidAddr,
                     .parent = InvalidAddr,
@@ -44,6 +44,10 @@ pub fn LocationCache(comptime K: type, comptime V: type, comptime Tags: type) ty
         };
 
         const Slot = address_storage.MakeSlot(Node);
+        pub const Meta = struct {
+            height: *u8,
+            tags: *Tags,
+        };
 
         const chunk_bits = 10;
         const chunk_len = 1 << chunk_bits;
@@ -148,8 +152,20 @@ pub fn LocationCache(comptime K: type, comptime V: type, comptime Tags: type) ty
             return lhs.addr == rhs.addr;
         }
 
-        pub inline fn data(self: *Self, loc: Location) *Location.NodeData {
-            return &self.slot(loc.addr).used.data;
+        pub inline fn keyPtr(self: *Self, loc: Location) *K {
+            return &self.slot(loc.addr).used.data.k;
+        }
+
+        pub inline fn valuePtr(self: *Self, loc: Location) *V {
+            return &self.slot(loc.addr).used.data.v;
+        }
+
+        pub inline fn meta(self: *Self, loc: Location) Meta {
+            const data_ptr = &self.slot(loc.addr).used.data;
+            return .{
+                .height = &data_ptr.h,
+                .tags = &data_ptr.tags,
+            };
         }
 
         pub inline fn child(self: *Self, loc: Location, comptime dir: direction) ?Location {
@@ -287,8 +303,8 @@ test "stable locationcache reclaim frees tail chunks" {
     var locs: [1100]LocationType.Location = undefined;
     for (&locs, 0..) |*loc, idx| {
         loc.* = try lc.create();
-        lc.data(loc.*).k = @intCast(idx);
-        lc.data(loc.*).v = @intCast(idx);
+        lc.keyPtr(loc.*).* = @intCast(idx);
+        lc.valuePtr(loc.*).* = @intCast(idx);
     }
 
     for (0..locs.len - 1) |idx| {

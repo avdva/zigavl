@@ -281,8 +281,8 @@ pub fn testReclaimCompactsPrefix(comptime LocationType: type) !void {
     var locs: [8]LocationType.Location = undefined;
     for (&locs, 0..) |*loc, idx| {
         loc.* = try cache.create();
-        cache.data(loc.*).k = @intCast(idx);
-        cache.data(loc.*).v = @intCast(idx);
+        cache.keyPtr(loc.*).* = @intCast(idx);
+        cache.valuePtr(loc.*).* = @intCast(idx);
     }
 
     cache.destroy(locs[1]);
@@ -301,7 +301,7 @@ pub fn testReclaimCompactsPrefix(comptime LocationType: type) !void {
     }
 
     try std.testing.expectEqual(@as(LocationType.Address, 3), moved_anchor.addr);
-    try std.testing.expectEqual(@as(i64, 4), cache.data(moved_anchor).k);
+    try std.testing.expectEqual(@as(i64, 4), cache.keyPtr(moved_anchor).*);
     try std.testing.expectEqual(@as(i64, 5), cache.slotAt(1).used.data.k);
 }
 
@@ -313,8 +313,8 @@ pub fn testReclaimScansPrefixWhenFreeListIsLarger(comptime LocationType: type) !
     var locs: [10]LocationType.Location = undefined;
     for (&locs, 0..) |*loc, idx| {
         loc.* = try cache.create();
-        cache.data(loc.*).k = @intCast(idx);
-        cache.data(loc.*).v = @intCast(idx);
+        cache.keyPtr(loc.*).* = @intCast(idx);
+        cache.valuePtr(loc.*).* = @intCast(idx);
     }
 
     cache.destroy(locs[0]);
