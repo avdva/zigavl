@@ -1,29 +1,11 @@
 const std = @import("std");
 const math = std.math;
+const cache = @import("cache.zig");
 const direction = @import("direction.zig").direction;
-const ptrLocationCache = @import("pointer_location.zig").LocationCache;
-const arrayLocationCache = @import("array_location.zig").LocationCache;
-const stableArrayLocationCache = @import("stable_array_location.zig").LocationCache;
 
-// NodeCacheType selects how tree nodes are stored.
-pub const NodeCacheType = enum(u8) {
-    // PointerBased allocates each node separately through the provided allocator.
-    // It keeps value pointers stable across future insertions and is the most
-    // conservative default backend.
-    PointerBased,
+pub const NodeCacheType = cache.NodeCacheType;
 
-    // ArrayBased stores nodes in a contiguous ArrayList-backed slot cache.
-    // It usually has good locality and compact node links, but future insertions
-    // may reallocate the backing array and invalidate previously returned *V pointers.
-    ArrayBased,
-
-    // StableArrayBased stores nodes in fixed-size chunks addressed by compact u32
-    // handles. It keeps value pointers stable across future insertions; chunks are
-    // kept until deinit(), so memory usage can grow to the peak node count.
-    StableArrayBased,
-};
-
-// Options defines some comptime parameters of the tree type.
+// Options defines compile-time parameters of the tree type.
 pub const Options = struct {
     // countChildren, if set, enables children counts for every node of the tree.
     // the number of children allows to locate a node by its position with a guaranteed complexity O(logn).
@@ -32,7 +14,7 @@ pub const Options = struct {
     // nodeCacheType selects the node storage backend. PointerBased is the safest
     // default, ArrayBased favors locality with a pointer-stability caveat, and
     // StableArrayBased preserves pointer stability with chunked storage.
-    nodeCacheType: NodeCacheType = .PointerBased,
+    nodeCacheType: cache.NodeCacheType = .PointerBased,
 };
 
 // InitOptions defines some runtime parameters of the tree instance.
@@ -66,14 +48,7 @@ pub fn TreeWithOptions(comptime K: type, comptime V: type, comptime Cmp: fn (a: 
         struct { childrenCount: u32 = 0 }
     else
         struct {};
-    const Cache = blk: {
-        const cacheType = switch (options.nodeCacheType) {
-            .ArrayBased => arrayLocationCache(K, V, Tags),
-            .PointerBased => ptrLocationCache(K, V, Tags),
-            .StableArrayBased => stableArrayLocationCache(K, V, Tags),
-        };
-        break :blk cacheType;
-    };
+    const Cache = cache.Create(options.nodeCacheType, K, V, Tags);
     return InitTreeType(K, V, Cache, Cmp, options);
 }
 
@@ -88,19 +63,7 @@ fn InitTreeType(comptime K: type, comptime V: type, comptime Cache: type, compti
         const Comparer = Cmp;
         const TreeOptions = options;
 
-        const cacheCapabilities = struct {
-            hasFastClear: bool,
-            hasCompactStorage: bool,
-            hasOrderedStorage: bool,
-        }{
-            .hasFastClear = @hasDecl(Cache, "clearAll"),
-            .hasCompactStorage = @hasDecl(Cache, "reclaim"),
-            .hasOrderedStorage = @hasDecl(Cache, "relocate") and
-                @hasDecl(Cache, "finishOrderStorage") and
-                @hasDecl(Cache, "locationAt") and
-                @hasDecl(Cache, "nextLocation") and
-                @hasDecl(Cache, "prevLocation"),
-        };
+        const cacheCapabilities = cache.getCapabilities(Cache);
 
         const LocateResult = struct {
             loc: ?Location,
@@ -2682,7 +2645,7 @@ fn testFastDeinit(
     io: InitOptions,
     a: std.mem.Allocator,
 ) !void {
-    const cacheType = ptrLocationCache(i64, i64, struct {});
+    const cacheType = cache.Create(.PointerBased, i64, i64, struct {});
     const TreeType = InitTreeType(i64, i64, TestLocationCache(cacheType), i64Cmp, .{});
     var t = try TreeType.initWithOptions(a, io);
     defer t.deinit();
