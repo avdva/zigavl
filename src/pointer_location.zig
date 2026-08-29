@@ -1,4 +1,5 @@
 const std = @import("std");
+const cache_contract = @import("cache_contract.zig");
 const direction = @import("direction.zig").direction;
 const node_lib = @import("node.zig");
 const utils = @import("utils.zig");
@@ -66,10 +67,7 @@ pub fn LocationCache(comptime K: type, comptime V: type, comptime Tags: type) ty
     return struct {
         const Self = @This();
         pub const Location = MakePtrLocationType(K, V, Tags);
-        pub const Meta = struct {
-            height: *u8,
-            tags: *Tags,
-        };
+        pub const Meta = cache_contract.Meta(Tags);
 
         a: std.mem.Allocator,
 

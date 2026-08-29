@@ -1,6 +1,7 @@
 const std = @import("std");
 const math = std.math;
 const cache = @import("cache.zig");
+const cache_contract = @import("cache_contract.zig");
 const direction = @import("direction.zig").direction;
 
 pub const NodeCacheType = cache.NodeCacheType;
@@ -63,7 +64,7 @@ fn InitTreeType(comptime K: type, comptime V: type, comptime Cache: type, compti
         const Comparer = Cmp;
         const TreeOptions = options;
 
-        const cacheCapabilities = cache.getCapabilities(Cache);
+        const cacheCapabilities = cache_contract.getCapabilities(Cache);
 
         const LocateResult = struct {
             loc: ?Location,
@@ -1607,6 +1608,8 @@ test "tree clear across options" {
     try testTreeClear(.{ .countChildren = true, .nodeCacheType = .ArrayBased });
     try testTreeClear(.{ .countChildren = false, .nodeCacheType = .StableArrayBased });
     try testTreeClear(.{ .countChildren = true, .nodeCacheType = .StableArrayBased });
+    try testTreeClear(.{ .countChildren = false, .nodeCacheType = .SplitArrayBased });
+    try testTreeClear(.{ .countChildren = true, .nodeCacheType = .SplitArrayBased });
 }
 
 fn testTreeReclaimSearchable(comptime options: Options) !void {
@@ -2324,6 +2327,8 @@ test "tree rank range and bounds match sorted slice across options" {
     try testRankRangeAndBoundsAgainstSortedSlice(.{ .countChildren = true, .nodeCacheType = .ArrayBased });
     try testRankRangeAndBoundsAgainstSortedSlice(.{ .countChildren = false, .nodeCacheType = .StableArrayBased });
     try testRankRangeAndBoundsAgainstSortedSlice(.{ .countChildren = true, .nodeCacheType = .StableArrayBased });
+    try testRankRangeAndBoundsAgainstSortedSlice(.{ .countChildren = false, .nodeCacheType = .SplitArrayBased });
+    try testRankRangeAndBoundsAgainstSortedSlice(.{ .countChildren = true, .nodeCacheType = .SplitArrayBased });
 }
 
 test "tree floorRankWithCountChildren" {
@@ -2589,6 +2594,10 @@ test "tree random (pointer cache)" {
 
 test "tree random (array cache)" {
     try testTreeRandom(.{ .countChildren = true, .nodeCacheType = .ArrayBased });
+}
+
+test "tree random (split array cache)" {
+    try testTreeRandom(.{ .countChildren = true, .nodeCacheType = .SplitArrayBased });
 }
 
 fn TestLocationCache(comptime underlying: type) type {

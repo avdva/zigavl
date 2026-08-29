@@ -1,5 +1,6 @@
 const std = @import("std");
 const address_storage = @import("address_storage.zig");
+const cache_contract = @import("cache_contract.zig");
 const direction = @import("direction.zig").direction;
 const node_lib = @import("node.zig");
 const utils = @import("utils.zig");
@@ -46,10 +47,7 @@ pub fn LocationCache(comptime K: type, comptime V: type, comptime Tags: type) ty
         };
 
         const Slot = address_storage.MakeSlot(Node);
-        pub const Meta = struct {
-            height: *u8,
-            tags: *Tags,
-        };
+        pub const Meta = cache_contract.Meta(Tags);
 
         a: std.mem.Allocator,
         nodes: std.ArrayList(Slot),
