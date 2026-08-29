@@ -91,9 +91,10 @@ Notes:
 - `nodeCacheType = .PointerBased` allocates nodes separately and keeps returned value pointers stable across future insertions.
 - `nodeCacheType = .ArrayBased` stores tree nodes in an array-backed free-list cache instead of allocating each node separately. Future insertions may reallocate storage and invalidate previously returned value pointers.
 - `nodeCacheType = .StableArrayBased` stores tree nodes in fixed-size chunks. It keeps returned value pointers stable across future insertions, while memory usage can grow to the peak node count until `compactStorage`, `clear`, or `deinit`.
-- `compactStorage()` compacts address-based caches after deletions. `.ArrayBased` can shrink its backing array and `.StableArrayBased` can free unused tail chunks; `.PointerBased` treats it as a no-op.
-- `orderStorageByKey()` orders address-based cache storage by sorted key order. It is useful when a tree is built or bulk-mutated first and then queried many times by key or sorted position. After it succeeds, `get` uses binary search over dense storage in `O(logn)`, `at`, `iteratorAt`, and `deleteAt` resolve positions in `O(1)`, and iterator `next`/`prev` steps can advance through adjacent storage slots until the next structural mutation. The reordering itself is `O(n)`, and it may invalidate existing iterators, locations, entries, and value pointers.
-- `clear()` removes all elements and releases node storage owned by the tree. Complexity depends on storage backend: `O(n)` for `.PointerBased`, `O(1)` for `.ArrayBased`, and `O(number_of_chunks)` for `.StableArrayBased`.
+- `nodeCacheType = .SplitArrayBased` stores keys, values, metadata, and tree links in separate contiguous arrays. It is experimental and can reduce cache traffic for lookup-heavy workloads; future insertions may reallocate storage and invalidate previously returned value pointers.
+- `compactStorage()` compacts address-based caches after deletions. `.ArrayBased` can shrink its backing array and `.StableArrayBased` can free unused tail chunks; `.PointerBased` and `.SplitArrayBased` treat it as a no-op.
+- `orderStorageByKey()` orders supported address-based cache storage by sorted key order. It is useful when a tree is built or bulk-mutated first and then queried many times by key or sorted position. After it succeeds, `get` uses binary search over dense storage in `O(logn)`, `at`, `iteratorAt`, and `deleteAt` resolve positions in `O(1)`, and iterator `next`/`prev` steps can advance through adjacent storage slots until the next structural mutation. The reordering itself is `O(n)`, and it may invalidate existing iterators, locations, entries, and value pointers. Currently this is supported by `.ArrayBased` and `.StableArrayBased`.
+- `clear()` removes all elements and releases node storage owned by the tree. Complexity depends on storage backend: `O(n)` for `.PointerBased` and `.SplitArrayBased`, `O(1)` for `.ArrayBased`, and `O(number_of_chunks)` for `.StableArrayBased`.
 - `Entry.Value` points into the tree and can be used to update the stored value. `KV.Value` is an owned value copied out from a deleted node.
 - Iterators are valid only for the tree that created them. If the node pointed to by an iterator is deleted, that iterator becomes invalid; use the iterator returned by `deleteIterator`.
 
@@ -194,6 +195,15 @@ pub fn main() !void {
     }
 }
 
+```
+
+Use `TreeWithOptions` to select a storage backend:
+
+```zig
+const LookupOptimizedTree = zigavl.TreeWithOptions(i64, i64, i64Cmp, .{
+    .countChildren = true,
+    .nodeCacheType = .SplitArrayBased,
+});
 ```
 
 ## Benchmarks
