@@ -1,5 +1,6 @@
 const std = @import("std");
 const address_storage = @import("address_storage.zig");
+const cache_contract = @import("cache_contract.zig");
 const direction = @import("direction.zig").direction;
 const node_lib = @import("node.zig");
 const utils = @import("utils.zig");
@@ -10,6 +11,7 @@ pub fn LocationCache(comptime K: type, comptime V: type, comptime Tags: type) ty
 
         pub const Address = address_storage.Address;
         pub const InvalidAddr = address_storage.InvalidAddr;
+        const NodeData = node_lib.MakeDataType(K, V, Tags);
 
         // Location is a compact handle into the cache's slots array.
         // It deliberately does not store a pointer back to the cache; all storage
@@ -18,7 +20,6 @@ pub fn LocationCache(comptime K: type, comptime V: type, comptime Tags: type) ty
         // returned to node values can be invalidated by future insertions.
         pub const Location = struct {
             const Loc = @This();
-            pub const NodeData = node_lib.MakeDataType(K, V, Tags);
 
             addr: Address,
 
@@ -30,14 +31,14 @@ pub fn LocationCache(comptime K: type, comptime V: type, comptime Tags: type) ty
         };
 
         const Node = struct {
-            data: Location.NodeData,
+            data: NodeData,
             left: Address,
             right: Address,
             parent: Address,
 
             fn init() Node {
                 return Node{
-                    .data = Location.NodeData{},
+                    .data = NodeData{},
                     .left = InvalidAddr,
                     .right = InvalidAddr,
                     .parent = InvalidAddr,
@@ -46,6 +47,7 @@ pub fn LocationCache(comptime K: type, comptime V: type, comptime Tags: type) ty
         };
 
         const Slot = address_storage.MakeSlot(Node);
+        pub const Meta = cache_contract.Meta(Tags);
 
         a: std.mem.Allocator,
         nodes: std.ArrayList(Slot),
@@ -112,8 +114,20 @@ pub fn LocationCache(comptime K: type, comptime V: type, comptime Tags: type) ty
             return lhs.addr == rhs.addr;
         }
 
-        pub fn data(self: *Self, loc: Location) *Location.NodeData {
-            return &self.node(loc).data;
+        pub fn keyPtr(self: *Self, loc: Location) *K {
+            return &self.node(loc).data.k;
+        }
+
+        pub fn valuePtr(self: *Self, loc: Location) *V {
+            return &self.node(loc).data.v;
+        }
+
+        pub fn meta(self: *Self, loc: Location) Meta {
+            const data_ptr = &self.node(loc).data;
+            return .{
+                .height = &data_ptr.h,
+                .tags = &data_ptr.tags,
+            };
         }
 
         pub fn child(self: *Self, loc: Location, comptime dir: direction) ?Location {

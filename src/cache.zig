@@ -1,5 +1,7 @@
+const cache_contract = @import("cache_contract.zig");
 const arrayLocationCache = @import("array_location.zig").LocationCache;
 const ptrLocationCache = @import("pointer_location.zig").LocationCache;
+const splitArrayLocationCache = @import("split_array_location.zig").LocationCache;
 const stableArrayLocationCache = @import("stable_array_location.zig").LocationCache;
 
 // NodeCacheType selects how tree nodes are stored.
@@ -18,16 +20,16 @@ pub const NodeCacheType = enum(u8) {
     // handles. It keeps value pointers stable across future insertions; chunks are
     // kept until deinit(), so memory usage can grow to the peak node count.
     StableArrayBased,
+
+    // SplitArrayBased stores keys, values, metadata, and links in separate
+    // contiguous arrays. Searches mostly touch keys and links, so this layout can
+    // reduce cache traffic when values are larger or colder than ordering data.
+    // It is experimental and currently exposes only the basic cache contract.
+    SplitArrayBased,
 };
 
-// Capabilities is a struct that is computed based on the actual cache
-// implementation and contains flags that enable additional operations
-// on the cache.
-pub const Capabilities = struct {
-    hasFastClear: bool,
-    hasCompactStorage: bool,
-    hasOrderedStorage: bool,
-};
+pub const Capabilities = cache_contract.Capabilities;
+pub const getCapabilities = cache_contract.getCapabilities;
 
 // Create returns cache type of given type.
 pub fn Create(
@@ -40,18 +42,6 @@ pub fn Create(
         .ArrayBased => arrayLocationCache(K, V, Tags),
         .PointerBased => ptrLocationCache(K, V, Tags),
         .StableArrayBased => stableArrayLocationCache(K, V, Tags),
-    };
-}
-
-// getCapabilities computes and returns capabilities for given cache.
-pub fn getCapabilities(comptime Cache: type) Capabilities {
-    return Capabilities{
-        .hasFastClear = @hasDecl(Cache, "clearAll"),
-        .hasCompactStorage = @hasDecl(Cache, "reclaim"),
-        .hasOrderedStorage = @hasDecl(Cache, "relocate") and
-            @hasDecl(Cache, "finishOrderStorage") and
-            @hasDecl(Cache, "locationAt") and
-            @hasDecl(Cache, "nextLocation") and
-            @hasDecl(Cache, "prevLocation"),
+        .SplitArrayBased => splitArrayLocationCache(K, V, Tags),
     };
 }

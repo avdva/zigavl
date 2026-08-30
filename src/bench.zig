@@ -343,7 +343,7 @@ fn benchTree(comptime name: []const u8, comptime options: zigavl.Options, a: std
         .countChildren = true,
         .nodeCacheType = options.nodeCacheType,
     }, a);
-    if (options.nodeCacheType != .PointerBased) {
+    if (options.nodeCacheType == .ArrayBased or options.nodeCacheType == .StableArrayBased) {
         try benchIteratorOrdered(name, options, a);
         try benchAtOrdered(name, options, a);
         try benchAtOrderedIncludingOrder(name, options, a);
@@ -360,4 +360,5 @@ pub fn main() !void {
     try benchTree("pointer", .{ .nodeCacheType = .PointerBased }, a, random_keys);
     try benchTree("array", .{ .nodeCacheType = .ArrayBased }, a, random_keys);
     try benchTree("stable-array", .{ .nodeCacheType = .StableArrayBased }, a, random_keys);
+    try benchTree("split-array", .{ .nodeCacheType = .SplitArrayBased }, a, random_keys);
 }

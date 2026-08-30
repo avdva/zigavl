@@ -1,4 +1,5 @@
 const std = @import("std");
+const cache_contract = @import("cache_contract.zig");
 const direction = @import("direction.zig").direction;
 const node_lib = @import("node.zig");
 const utils = @import("utils.zig");
@@ -6,7 +7,7 @@ const utils = @import("utils.zig");
 fn MakePtrLocationType(comptime K: type, comptime V: type, comptime Tags: type) type {
     return struct {
         const Self = @This();
-        pub const NodeData = node_lib.MakeDataType(K, V, Tags);
+        const NodeData = node_lib.MakeDataType(K, V, Tags);
 
         const Node = struct {
             data: NodeData,
@@ -34,10 +35,6 @@ fn MakePtrLocationType(comptime K: type, comptime V: type, comptime Tags: type) 
 
         pub fn eq(self: *const Self, other: Self) bool {
             return self.ptr == other.ptr;
-        }
-
-        pub fn data(self: *const Self) *NodeData {
-            return &self.ptr.data;
         }
 
         pub fn child(self: *const Self, comptime dir: direction) ?Self {
@@ -70,6 +67,7 @@ pub fn LocationCache(comptime K: type, comptime V: type, comptime Tags: type) ty
     return struct {
         const Self = @This();
         pub const Location = MakePtrLocationType(K, V, Tags);
+        pub const Meta = cache_contract.Meta(Tags);
 
         a: std.mem.Allocator,
 
@@ -99,8 +97,19 @@ pub fn LocationCache(comptime K: type, comptime V: type, comptime Tags: type) ty
             return lhs.eq(rhs);
         }
 
-        pub fn data(_: *Self, loc: Location) *Location.NodeData {
-            return loc.data();
+        pub fn keyPtr(_: *Self, loc: Location) *K {
+            return &loc.ptr.data.k;
+        }
+
+        pub fn valuePtr(_: *Self, loc: Location) *V {
+            return &loc.ptr.data.v;
+        }
+
+        pub fn meta(_: *Self, loc: Location) Meta {
+            return .{
+                .height = &loc.ptr.data.h,
+                .tags = &loc.ptr.data.tags,
+            };
         }
 
         pub fn child(_: *Self, loc: Location, comptime dir: direction) ?Location {
