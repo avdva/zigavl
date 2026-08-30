@@ -24,7 +24,6 @@ pub const NodeCacheType = enum(u8) {
     // SplitArrayBased stores keys, values, metadata, and links in separate
     // contiguous arrays. Searches mostly touch keys and links, so this layout can
     // reduce cache traffic when values are larger or colder than ordering data.
-    // It is experimental and currently exposes only the basic cache contract.
     SplitArrayBased,
 };
 

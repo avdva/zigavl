@@ -1,13 +1,16 @@
 const std = @import("std");
 const cache_contract = @import("cache_contract.zig");
 const direction = @import("direction.zig").direction;
-const node_lib = @import("node.zig");
-const utils = @import("utils.zig");
 
 fn MakePtrLocationType(comptime K: type, comptime V: type, comptime Tags: type) type {
     return struct {
         const Self = @This();
-        const NodeData = node_lib.MakeDataType(K, V, Tags);
+        const NodeData = struct {
+            k: K = undefined,
+            v: V = undefined,
+            tags: Tags = undefined,
+            h: u8 = 0,
+        };
 
         const Node = struct {
             data: NodeData,
@@ -70,10 +73,12 @@ pub fn LocationCache(comptime K: type, comptime V: type, comptime Tags: type) ty
         pub const Meta = cache_contract.Meta(Tags);
 
         a: std.mem.Allocator,
+        fast_deinit_allowed: bool,
 
         pub fn init(a: std.mem.Allocator) !Self {
             return Self{
                 .a = a,
+                .fast_deinit_allowed = cache_contract.fastDeinitAllowed(a),
             };
         }
 
@@ -90,7 +95,7 @@ pub fn LocationCache(comptime K: type, comptime V: type, comptime Tags: type) ty
         }
 
         pub fn fastDeinitAllowed(self: *Self) bool {
-            return utils.fastDeinitAllowed(self.a);
+            return self.fast_deinit_allowed;
         }
 
         pub fn eq(_: *Self, lhs: Location, rhs: Location) bool {

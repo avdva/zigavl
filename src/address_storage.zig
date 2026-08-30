@@ -47,18 +47,16 @@ pub fn swapAtAddresses(cache: anytype, addr_1: Address, addr_2: Address) void {
         if (ptr_2.* == .free) {
             return;
         }
-        ptr_1.* = ptr_2.*;
-        ptr_2.* = .{ .free = InvalidAddr };
+        cache.swapSlots(addr_1, addr_2);
         updateLinks(cache, addr_2, addr_1);
         return;
     }
     if (ptr_2.* == .free) {
-        ptr_2.* = ptr_1.*;
-        ptr_1.* = .{ .free = InvalidAddr };
+        cache.swapSlots(addr_1, addr_2);
         updateLinks(cache, addr_1, addr_2);
         return;
     }
-    std.mem.swap(@TypeOf(ptr_1.*), ptr_1, ptr_2);
+    cache.swapSlots(addr_1, addr_2);
     updateLinks(cache, addr_2, addr_1);
     updateLinks(cache, addr_1, addr_2);
 }
@@ -302,7 +300,7 @@ pub fn testReclaimCompactsPrefix(comptime LocationType: type) !void {
 
     try std.testing.expectEqual(@as(LocationType.Address, 3), moved_anchor.addr);
     try std.testing.expectEqual(@as(i64, 4), cache.keyPtr(moved_anchor).*);
-    try std.testing.expectEqual(@as(i64, 5), cache.slotAt(1).used.data.k);
+    try std.testing.expectEqual(@as(i64, 5), cache.keyPtr(cache.locationAt(1)).*);
 }
 
 pub fn testReclaimScansPrefixWhenFreeListIsLarger(comptime LocationType: type) !void {
@@ -332,9 +330,9 @@ pub fn testReclaimScansPrefixWhenFreeListIsLarger(comptime LocationType: type) !
     try std.testing.expectEqual(LocationType.InvalidAddr, cache.freeHead());
     try std.testing.expectEqual(@as(LocationType.Address, 1), moved_anchor.addr);
 
-    try std.testing.expectEqual(@as(i64, 4), cache.slotAt(0).used.data.k);
-    try std.testing.expectEqual(@as(i64, 8), cache.slotAt(1).used.data.k);
-    try std.testing.expectEqual(@as(i64, 9), cache.slotAt(2).used.data.k);
+    try std.testing.expectEqual(@as(i64, 4), cache.keyPtr(cache.locationAt(0)).*);
+    try std.testing.expectEqual(@as(i64, 8), cache.keyPtr(cache.locationAt(1)).*);
+    try std.testing.expectEqual(@as(i64, 9), cache.keyPtr(cache.locationAt(2)).*);
 }
 
 pub fn testReclaimClampsLoadFactor(comptime LocationType: type) !void {

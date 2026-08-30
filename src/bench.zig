@@ -343,7 +343,10 @@ fn benchTree(comptime name: []const u8, comptime options: zigavl.Options, a: std
         .countChildren = true,
         .nodeCacheType = options.nodeCacheType,
     }, a);
-    if (options.nodeCacheType == .ArrayBased or options.nodeCacheType == .StableArrayBased) {
+    if (options.nodeCacheType == .ArrayBased or
+        options.nodeCacheType == .StableArrayBased or
+        options.nodeCacheType == .SplitArrayBased)
+    {
         try benchIteratorOrdered(name, options, a);
         try benchAtOrdered(name, options, a);
         try benchAtOrderedIncludingOrder(name, options, a);
