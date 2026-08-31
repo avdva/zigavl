@@ -2,8 +2,6 @@ const std = @import("std");
 const address_storage = @import("address_storage.zig");
 const cache_contract = @import("cache_contract.zig");
 const direction = @import("direction.zig").direction;
-const node_lib = @import("node.zig");
-const utils = @import("utils.zig");
 
 pub fn LocationCache(comptime K: type, comptime V: type, comptime Tags: type) type {
     return struct {
@@ -11,7 +9,12 @@ pub fn LocationCache(comptime K: type, comptime V: type, comptime Tags: type) ty
 
         pub const Address = address_storage.Address;
         pub const InvalidAddr = address_storage.InvalidAddr;
-        const NodeData = node_lib.MakeDataType(K, V, Tags);
+        const NodeData = struct {
+            k: K = undefined,
+            v: V = undefined,
+            tags: Tags = undefined,
+            h: u8 = 0,
+        };
 
         // Location is a compact stable handle into this cache.
         // It stores only a logical address, so tree nodes can refer to each other
@@ -56,6 +59,7 @@ pub fn LocationCache(comptime K: type, comptime V: type, comptime Tags: type) ty
         };
 
         a: std.mem.Allocator,
+        fast_deinit_allowed: bool,
         chunks: std.ArrayList(*Chunk),
         len: Address,
         free_head: Address,
@@ -64,6 +68,7 @@ pub fn LocationCache(comptime K: type, comptime V: type, comptime Tags: type) ty
         pub fn init(a: std.mem.Allocator) !Self {
             return Self{
                 .a = a,
+                .fast_deinit_allowed = cache_contract.fastDeinitAllowed(a),
                 .chunks = try std.ArrayList(*Chunk).initCapacity(a, 1),
                 .len = 0,
                 .free_head = InvalidAddr,
@@ -127,7 +132,7 @@ pub fn LocationCache(comptime K: type, comptime V: type, comptime Tags: type) ty
         }
 
         pub fn fastDeinitAllowed(self: *Self) bool {
-            return utils.fastDeinitAllowed(self.a);
+            return self.fast_deinit_allowed;
         }
 
         inline fn chunkIndex(addr: Address) usize {
@@ -144,6 +149,10 @@ pub fn LocationCache(comptime K: type, comptime V: type, comptime Tags: type) ty
 
         pub inline fn slotAt(self: *Self, addr: Address) *Slot {
             return self.slot(addr);
+        }
+
+        pub fn swapSlots(self: *Self, addr_1: Address, addr_2: Address) void {
+            std.mem.swap(Slot, self.slotAt(addr_1), self.slotAt(addr_2));
         }
 
         pub inline fn eq(_: *Self, lhs: Location, rhs: Location) bool {

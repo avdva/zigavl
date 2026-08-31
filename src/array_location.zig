@@ -2,8 +2,6 @@ const std = @import("std");
 const address_storage = @import("address_storage.zig");
 const cache_contract = @import("cache_contract.zig");
 const direction = @import("direction.zig").direction;
-const node_lib = @import("node.zig");
-const utils = @import("utils.zig");
 
 pub fn LocationCache(comptime K: type, comptime V: type, comptime Tags: type) type {
     return struct {
@@ -11,7 +9,12 @@ pub fn LocationCache(comptime K: type, comptime V: type, comptime Tags: type) ty
 
         pub const Address = address_storage.Address;
         pub const InvalidAddr = address_storage.InvalidAddr;
-        const NodeData = node_lib.MakeDataType(K, V, Tags);
+        const NodeData = struct {
+            k: K = undefined,
+            v: V = undefined,
+            tags: Tags = undefined,
+            h: u8 = 0,
+        };
 
         // Location is a compact handle into the cache's slots array.
         // It deliberately does not store a pointer back to the cache; all storage
@@ -50,6 +53,7 @@ pub fn LocationCache(comptime K: type, comptime V: type, comptime Tags: type) ty
         pub const Meta = cache_contract.Meta(Tags);
 
         a: std.mem.Allocator,
+        fast_deinit_allowed: bool,
         nodes: std.ArrayList(Slot),
         free_head: Address,
         free_count: usize,
@@ -57,6 +61,7 @@ pub fn LocationCache(comptime K: type, comptime V: type, comptime Tags: type) ty
         pub fn init(a: std.mem.Allocator) !Self {
             return Self{
                 .a = a,
+                .fast_deinit_allowed = cache_contract.fastDeinitAllowed(a),
                 .nodes = try std.ArrayList(Slot).initCapacity(a, 16),
                 .free_head = InvalidAddr,
                 .free_count = 0,
@@ -103,7 +108,7 @@ pub fn LocationCache(comptime K: type, comptime V: type, comptime Tags: type) ty
         }
 
         pub fn fastDeinitAllowed(self: *Self) bool {
-            return utils.fastDeinitAllowed(self.a);
+            return self.fast_deinit_allowed;
         }
 
         fn node(self: *Self, loc: Location) *Node {
@@ -205,6 +210,10 @@ pub fn LocationCache(comptime K: type, comptime V: type, comptime Tags: type) ty
 
         pub fn slotAt(self: *Self, addr: Address) *Slot {
             return &self.nodes.items[addr];
+        }
+
+        pub fn swapSlots(self: *Self, addr_1: Address, addr_2: Address) void {
+            std.mem.swap(Slot, self.slotAt(addr_1), self.slotAt(addr_2));
         }
 
         // finishReclaim finalizes address compaction for ArrayList-backed

@@ -2,7 +2,6 @@ const std = @import("std");
 const address_storage = @import("address_storage.zig");
 const cache_contract = @import("cache_contract.zig");
 const direction = @import("direction.zig").direction;
-const utils = @import("utils.zig");
 
 pub fn LocationCache(comptime K: type, comptime V: type, comptime Tags: type) type {
     return struct {
@@ -43,6 +42,7 @@ pub fn LocationCache(comptime K: type, comptime V: type, comptime Tags: type) ty
         };
 
         a: std.mem.Allocator,
+        fast_deinit_allowed: bool,
 
         // Split storage keeps frequently compared keys and navigation links away
         // from values. That lets search/rotation-heavy paths touch less unrelated
@@ -61,6 +61,7 @@ pub fn LocationCache(comptime K: type, comptime V: type, comptime Tags: type) ty
         pub fn init(a: std.mem.Allocator) !Self {
             return .{
                 .a = a,
+                .fast_deinit_allowed = cache_contract.fastDeinitAllowed(a),
                 .keys = try std.ArrayList(K).initCapacity(a, 16),
                 .values = try std.ArrayList(V).initCapacity(a, 16),
                 .metas = try std.ArrayList(MetaStorage).initCapacity(a, 16),
@@ -75,6 +76,19 @@ pub fn LocationCache(comptime K: type, comptime V: type, comptime Tags: type) ty
             self.values.deinit(self.a);
             self.metas.deinit(self.a);
             self.links.deinit(self.a);
+        }
+
+        pub fn clearAll(self: *Self) void {
+            self.keys.deinit(self.a);
+            self.values.deinit(self.a);
+            self.metas.deinit(self.a);
+            self.links.deinit(self.a);
+            self.keys = .empty;
+            self.values = .empty;
+            self.metas = .empty;
+            self.links = .empty;
+            self.free_head = InvalidAddr;
+            self.free_count = 0;
         }
 
         pub fn create(self: *Self) !Location {
@@ -110,7 +124,7 @@ pub fn LocationCache(comptime K: type, comptime V: type, comptime Tags: type) ty
         }
 
         pub fn fastDeinitAllowed(self: *Self) bool {
-            return utils.fastDeinitAllowed(self.a);
+            return self.fast_deinit_allowed;
         }
 
         pub fn eq(_: *Self, lhs: Location, rhs: Location) bool {
@@ -163,5 +177,122 @@ pub fn LocationCache(comptime K: type, comptime V: type, comptime Tags: type) ty
         pub fn setParent(self: *Self, loc: *Location, p: ?Location) void {
             self.linkPtr(loc.*).parent = if (p) |parent_loc| parent_loc.addr else InvalidAddr;
         }
+
+        // reclaim delegates address compaction to the shared storage logic and
+        // converts the returned anchor address back to Location.
+        pub fn reclaim(self: *Self, loadFactor: u16, anchor: ?Location) ?Location {
+            const anchor_addr = if (anchor) |loc| loc.addr else null;
+            const new_anchor = address_storage.reclaim(self, loadFactor, anchor_addr);
+            return if (new_anchor) |addr| Location.init(addr) else null;
+        }
+
+        // relocate moves the occupied element addressed by loc to address pos,
+        // updating all address links touched by the move. It returns the new
+        // Location of that same element.
+        pub fn relocate(self: *Self, loc: Location, pos: usize) Location {
+            return Location.init(address_storage.relocate(self, loc.addr, @intCast(pos)));
+        }
+
+        // locationAt converts a storage address to a Location handle. Callers are
+        // responsible for only passing addresses known to contain occupied slots.
+        pub fn locationAt(_: *Self, pos: usize) Location {
+            return Location.init(@intCast(pos));
+        }
+
+        // nextLocation returns the handle for the next storage slot when the
+        // caller treats a dense slot range as an ordered sequence.
+        pub fn nextLocation(_: *Self, loc: Location, len: usize) ?Location {
+            const next_addr = loc.addr + 1;
+            return if (next_addr < len) Location.init(next_addr) else null;
+        }
+
+        // prevLocation returns the handle for the previous storage slot when the
+        // caller treats a dense slot range as an ordered sequence.
+        pub fn prevLocation(_: *Self, loc: Location) ?Location {
+            return if (loc.addr > 0) Location.init(loc.addr - 1) else null;
+        }
+
+        pub fn slotsLen(self: *Self) usize {
+            return self.links.items.len;
+        }
+
+        pub fn freeCount(self: *Self) usize {
+            return self.free_count;
+        }
+
+        pub fn freeHead(self: *Self) Address {
+            return self.free_head;
+        }
+
+        pub fn slotAt(self: *Self, addr: Address) *LinkSlot {
+            return &self.links.items[addr];
+        }
+
+        // swapSlots keeps all split arrays aligned while moving an address slot.
+        // The links/free-list tag is the authoritative occupancy state, but keys,
+        // values, and metadata must move with live slots so each address continues
+        // to describe one logical tree node.
+        pub fn swapSlots(self: *Self, addr_1: Address, addr_2: Address) void {
+            std.mem.swap(K, &self.keys.items[addr_1], &self.keys.items[addr_2]);
+            std.mem.swap(V, &self.values.items[addr_1], &self.values.items[addr_2]);
+            std.mem.swap(MetaStorage, &self.metas.items[addr_1], &self.metas.items[addr_2]);
+            std.mem.swap(LinkSlot, self.slotAt(addr_1), self.slotAt(addr_2));
+        }
+
+        // finishReclaim finalizes address compaction for split ArrayList-backed
+        // storage. The shared compaction code has already moved occupied slots
+        // into the retained prefix; this method shrinks every parallel array in
+        // lockstep and clears the free-list metadata.
+        pub fn finishReclaim(self: *Self, new_free_count: usize) void {
+            const used_count = self.links.items.len - self.free_count;
+            if (used_count == 0 and self.links.items.len == 0 and self.links.capacity > 0) {
+                self.keys.expandToCapacity();
+                self.values.expandToCapacity();
+                self.metas.expandToCapacity();
+                self.links.expandToCapacity();
+            }
+            self.keys.shrinkAndFree(self.a, used_count + new_free_count);
+            self.values.shrinkAndFree(self.a, used_count + new_free_count);
+            self.metas.shrinkAndFree(self.a, used_count + new_free_count);
+            self.links.shrinkAndFree(self.a, used_count + new_free_count);
+            self.keys.shrinkRetainingCapacity(used_count);
+            self.values.shrinkRetainingCapacity(used_count);
+            self.metas.shrinkRetainingCapacity(used_count);
+            self.links.shrinkRetainingCapacity(used_count);
+            self.free_count = 0;
+            self.free_head = InvalidAddr;
+        }
+
+        // finishOrderStorage trims every parallel array to the occupied prefix
+        // after all live nodes have been moved into sorted address order. Free
+        // slots are gone, but retained capacity can still be reused by append().
+        pub fn finishOrderStorage(self: *Self, used_count: usize) void {
+            self.keys.shrinkRetainingCapacity(used_count);
+            self.values.shrinkRetainingCapacity(used_count);
+            self.metas.shrinkRetainingCapacity(used_count);
+            self.links.shrinkRetainingCapacity(used_count);
+            self.free_count = 0;
+            self.free_head = InvalidAddr;
+        }
     };
+}
+
+test "split locationcache reclaim" {
+    const LocationType = LocationCache(i64, i64, struct {});
+    try address_storage.testReclaimEmpty(LocationType);
+}
+
+test "split locationcache reclaim compacts prefix" {
+    const LocationType = LocationCache(i64, i64, struct {});
+    try address_storage.testReclaimCompactsPrefix(LocationType);
+}
+
+test "split locationcache reclaim scans prefix when free list is larger than used part" {
+    const LocationType = LocationCache(i64, i64, struct {});
+    try address_storage.testReclaimScansPrefixWhenFreeListIsLarger(LocationType);
+}
+
+test "split locationcache reclaim clamps load factor" {
+    const LocationType = LocationCache(i64, i64, struct {});
+    try address_storage.testReclaimClampsLoadFactor(LocationType);
 }

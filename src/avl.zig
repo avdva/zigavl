@@ -1650,6 +1650,7 @@ fn testTreeReclaimSearchable(comptime options: Options) !void {
 test "tree compactStorage keeps compacting caches searchable" {
     try testTreeReclaimSearchable(.{ .countChildren = true, .nodeCacheType = .ArrayBased });
     try testTreeReclaimSearchable(.{ .countChildren = true, .nodeCacheType = .StableArrayBased });
+    try testTreeReclaimSearchable(.{ .countChildren = true, .nodeCacheType = .SplitArrayBased });
 }
 
 fn testTreeCompactStorageNoop(comptime options: Options) !void {
@@ -1699,7 +1700,7 @@ fn testTreeOrderStorageByKey(comptime options: Options) !void {
     try std.testing.expectEqual(@TypeOf(t.lc).InvalidAddr, t.lc.freeHead());
 
     for (expected, 0..) |key, idx| {
-        try std.testing.expectEqual(key, t.lc.slotAt(@intCast(idx)).used.data.k);
+        try std.testing.expectEqual(key, t.lc.keyPtr(t.lc.locationAt(idx)).*);
         try std.testing.expectEqual(key, t.at(idx).Key);
         try std.testing.expectEqual(key, t.iteratorAt(idx).value().?.Key);
     }
@@ -1736,6 +1737,8 @@ test "tree orderStorageByKey orders address caches by sorted key" {
     try testTreeOrderStorageByKey(.{ .countChildren = true, .nodeCacheType = .ArrayBased });
     try testTreeOrderStorageByKey(.{ .countChildren = false, .nodeCacheType = .StableArrayBased });
     try testTreeOrderStorageByKey(.{ .countChildren = true, .nodeCacheType = .StableArrayBased });
+    try testTreeOrderStorageByKey(.{ .countChildren = false, .nodeCacheType = .SplitArrayBased });
+    try testTreeOrderStorageByKey(.{ .countChildren = true, .nodeCacheType = .SplitArrayBased });
 }
 
 test "tree orderStorageByKey is noop for pointer cache" {
