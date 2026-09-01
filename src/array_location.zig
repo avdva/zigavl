@@ -50,7 +50,6 @@ pub fn LocationCache(comptime K: type, comptime V: type, comptime Tags: type) ty
         };
 
         const Slot = address_storage.MakeSlot(Node);
-        pub const Meta = cache_contract.Meta(Tags);
 
         a: std.mem.Allocator,
         fast_deinit_allowed: bool,
@@ -127,7 +126,7 @@ pub fn LocationCache(comptime K: type, comptime V: type, comptime Tags: type) ty
             return &self.node(loc).data.v;
         }
 
-        pub fn meta(self: *Self, loc: Location) Meta {
+        pub fn meta(self: *Self, loc: Location) cache_contract.Meta(Tags) {
             const data_ptr = &self.node(loc).data;
             return .{
                 .height = &data_ptr.h,

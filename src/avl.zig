@@ -50,6 +50,7 @@ pub fn TreeWithOptions(comptime K: type, comptime V: type, comptime Cmp: fn (a: 
     else
         struct {};
     const Cache = cache.Create(options.nodeCacheType, K, V, Tags);
+    cache_contract.assertBaseRequirements(Cache, K, V, Tags);
     return InitTreeType(K, V, Cache, Cmp, options);
 }
 
@@ -64,6 +65,7 @@ fn InitTreeType(comptime K: type, comptime V: type, comptime Cache: type, compti
         const Comparer = Cmp;
         const TreeOptions = options;
 
+        const Meta = @typeInfo(@TypeOf(Cache.meta)).@"fn".return_type.?;
         const cacheCapabilities = cache_contract.getCapabilities(Cache);
 
         const LocateResult = struct {
@@ -88,7 +90,7 @@ fn InitTreeType(comptime K: type, comptime V: type, comptime Cache: type, compti
             return self.lc.valuePtr(loc);
         }
 
-        fn meta(self: *Self, loc: Location) Cache.Meta {
+        fn meta(self: *Self, loc: Location) Meta {
             return self.lc.meta(loc);
         }
 
@@ -2607,22 +2609,22 @@ fn TestLocationCache(comptime underlying: type) type {
     return struct {
         const Self = @This();
         pub const Location = underlying.Location;
-        pub const Meta = underlying.Meta;
+        const Meta = @typeInfo(@TypeOf(underlying.meta)).@"fn".return_type.?;
 
         u: underlying,
 
         destroyHook: ?*const fn (loc: Location) void,
 
-        fn init(a: std.mem.Allocator) !Self {
+        pub fn init(a: std.mem.Allocator) !Self {
             return Self{
                 .u = try underlying.init(a),
                 .destroyHook = null,
             };
         }
 
-        fn deinit(_: *Self) void {}
+        pub fn deinit(_: *Self) void {}
 
-        fn create(self: *Self) !Location {
+        pub fn create(self: *Self) !Location {
             return self.u.create();
         }
 

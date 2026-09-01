@@ -70,7 +70,6 @@ pub fn LocationCache(comptime K: type, comptime V: type, comptime Tags: type) ty
     return struct {
         const Self = @This();
         pub const Location = MakePtrLocationType(K, V, Tags);
-        pub const Meta = cache_contract.Meta(Tags);
 
         a: std.mem.Allocator,
         fast_deinit_allowed: bool,
@@ -110,7 +109,7 @@ pub fn LocationCache(comptime K: type, comptime V: type, comptime Tags: type) ty
             return &loc.ptr.data.v;
         }
 
-        pub fn meta(_: *Self, loc: Location) Meta {
+        pub fn meta(_: *Self, loc: Location) cache_contract.Meta(Tags) {
             return .{
                 .height = &loc.ptr.data.h,
                 .tags = &loc.ptr.data.tags,

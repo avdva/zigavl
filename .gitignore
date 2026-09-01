@@ -3,3 +3,4 @@
 /.vscode
 /.zig-cache
 *.code-workspace
+.DS_Store
