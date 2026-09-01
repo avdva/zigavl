@@ -51,21 +51,15 @@ pub fn TreeWithOptions(comptime K: type, comptime V: type, comptime Cmp: fn (a: 
         struct {};
     const Cache = cache.Create(options.nodeCacheType, K, V, Tags);
     cache_contract.assertBaseRequirements(Cache, K, V, Tags);
-    return InitTreeType(K, V, Cache, Cmp, options);
+    const Meta = cache_contract.Meta(Tags);
+    return InitTreeType(K, V, Cache, Meta, Cmp, options);
 }
 
-fn InitTreeType(comptime K: type, comptime V: type, comptime Cache: type, comptime Cmp: fn (a: K, b: K) math.Order, comptime options: Options) type {
+fn InitTreeType(comptime K: type, comptime V: type, comptime Cache: type, comptime Meta: type, comptime Comparer: fn (a: K, b: K) math.Order, comptime options: Options) type {
     return struct {
         const Self = @This();
-
-        const KeyType = K;
-        const ValueType = V;
-
         const Location = Cache.Location;
-        const Comparer = Cmp;
-        const TreeOptions = options;
 
-        const Meta = @typeInfo(@TypeOf(Cache.meta)).@"fn".return_type.?;
         const cacheCapabilities = cache_contract.getCapabilities(Cache);
 
         const LocateResult = struct {
@@ -2677,8 +2671,10 @@ fn testFastDeinit(
     io: InitOptions,
     a: std.mem.Allocator,
 ) !void {
-    const cacheType = cache.Create(.PointerBased, i64, i64, struct {});
-    const TreeType = InitTreeType(i64, i64, TestLocationCache(cacheType), i64Cmp, .{});
+    const Tags = struct {};
+    const cacheType = cache.Create(.PointerBased, i64, i64, Tags);
+    const Meta = cache_contract.Meta(Tags);
+    const TreeType = InitTreeType(i64, i64, TestLocationCache(cacheType), Meta, i64Cmp, .{});
     var t = try TreeType.initWithOptions(a, io);
     defer t.deinit();
     t.lc.destroyHook = struct {
