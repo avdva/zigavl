@@ -20,8 +20,6 @@ pub fn LocationCache(comptime K: type, comptime V: type, comptime Tags: type) ty
             }
         };
 
-        pub const Meta = cache_contract.Meta(Tags);
-
         const Links = struct {
             left: Address = InvalidAddr,
             right: Address = InvalidAddr,
@@ -139,7 +137,7 @@ pub fn LocationCache(comptime K: type, comptime V: type, comptime Tags: type) ty
             return &self.values.items[loc.addr];
         }
 
-        pub fn meta(self: *Self, loc: Location) Meta {
+        pub fn meta(self: *Self, loc: Location) cache_contract.Meta(Tags) {
             const meta_ptr = &self.metas.items[loc.addr];
             return .{
                 .height = &meta_ptr.height,

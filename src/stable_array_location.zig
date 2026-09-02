@@ -48,7 +48,6 @@ pub fn LocationCache(comptime K: type, comptime V: type, comptime Tags: type) ty
         };
 
         const Slot = address_storage.MakeSlot(Node);
-        pub const Meta = cache_contract.Meta(Tags);
 
         const chunk_bits = 10;
         const chunk_len = 1 << chunk_bits;
@@ -167,7 +166,7 @@ pub fn LocationCache(comptime K: type, comptime V: type, comptime Tags: type) ty
             return &self.slot(loc.addr).used.data.v;
         }
 
-        pub inline fn meta(self: *Self, loc: Location) Meta {
+        pub inline fn meta(self: *Self, loc: Location) cache_contract.Meta(Tags) {
             const data_ptr = &self.slot(loc.addr).used.data;
             return .{
                 .height = &data_ptr.h,

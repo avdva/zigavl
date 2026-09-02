@@ -44,3 +44,12 @@ pub fn Create(
         .SplitArrayBased => splitArrayLocationCache(K, V, Tags),
     };
 }
+
+test "built-in caches satisfy base requirements" {
+    const Tags = struct {};
+
+    cache_contract.assertBaseRequirements(Create(.PointerBased, i64, i64, Tags), i64, i64, Tags);
+    cache_contract.assertBaseRequirements(Create(.ArrayBased, i64, i64, Tags), i64, i64, Tags);
+    cache_contract.assertBaseRequirements(Create(.StableArrayBased, i64, i64, Tags), i64, i64, Tags);
+    cache_contract.assertBaseRequirements(Create(.SplitArrayBased, i64, i64, Tags), i64, i64, Tags);
+}

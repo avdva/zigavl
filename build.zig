@@ -3,6 +3,7 @@ const std = @import("std");
 pub fn build(b: *std.Build) void {
     const target = b.standardTargetOptions(.{});
     const optimize = b.standardOptimizeOption(.{});
+    const strip = b.option(bool, "strip", "Strip debug information") orelse false;
     const zigavl_mod = b.addModule("zigavl", .{
         .root_source_file = b.path("src/lib.zig"),
         .target = target,
@@ -46,8 +47,13 @@ pub fn build(b: *std.Build) void {
             .root_source_file = b.path("src/bench.zig"),
             .target = target,
             .optimize = optimize,
+            .strip = strip,
         }),
     });
     const run_bench = b.addRunArtifact(bench);
     bench_step.dependOn(&run_bench.step);
+
+    const install_bench_step = b.step("install-bench", "Install benchmark executable");
+    const install_bench = b.addInstallArtifact(bench, .{});
+    install_bench_step.dependOn(&install_bench.step);
 }
