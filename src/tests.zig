@@ -112,6 +112,17 @@ test "tree example usage" {
         @panic("invalid range count");
     }
 
+    // bulk-build from strictly sorted items.
+    const sorted_items = [_]TreeType.KV{
+        .{ .Key = 20, .Value = 200 },
+        .{ .Key = 21, .Value = 210 },
+        .{ .Key = 22, .Value = 220 },
+    };
+    try t.buildFromSorted(&sorted_items);
+    if (t.getMin().?.Key != 20 or t.getMax().?.Key != 22) {
+        @panic("invalid buildFromSorted result");
+    }
+
     t.clear();
     if (t.len() != 0) {
         @panic("invalid clear result");

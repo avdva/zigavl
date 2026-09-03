@@ -48,6 +48,7 @@ pub fn compactStorage(self: *Self) void
 pub fn orderStorageByKey(self: *Self) void
 
 // insert:
+pub fn buildFromSorted(self: *Self, items: []const KV) !void
 pub fn insert(self: *Self, k: K, v: V) !InsertResult
 pub fn getOrInsert(self: *Self, k: K, v: V) !InsertResult 
 pub fn getOrEmplace(self: *Self, k: K, ctor: fn (v: *V, args: anytype) void, args: anytype) !InsertResult
@@ -94,6 +95,7 @@ Notes:
 - `nodeCacheType = .SplitArrayBased` stores keys, values, metadata, and tree links in separate contiguous arrays. It is experimental and can reduce cache traffic for lookup-heavy workloads; future insertions may reallocate storage and invalidate previously returned value pointers.
 - `compactStorage()` compacts address-based caches after deletions. `.ArrayBased` and `.SplitArrayBased` can shrink backing arrays, `.StableArrayBased` can free unused tail chunks, and `.PointerBased` treats it as a no-op.
 - `orderStorageByKey()` orders supported address-based cache storage by sorted key order. It is useful when a tree is built or bulk-mutated first and then queried many times by key or sorted position. After it succeeds, `get` uses binary search over dense storage in `O(logn)`, `at`, `iteratorAt`, and `deleteAt` resolve positions in `O(1)`, and iterator `next`/`prev` steps can advance through adjacent storage slots until the next structural mutation. The reordering itself is `O(n)`, and it may invalidate existing iterators, locations, entries, and value pointers. Currently this is supported by `.ArrayBased`, `.StableArrayBased`, and `.SplitArrayBased`.
+- `buildFromSorted()` replaces the tree contents from strictly sorted unique `KV` items in `O(n)`. Invalid order or duplicate keys return `error.ItemsNotStrictlySorted` before the existing tree is cleared. Supported address-based caches are stored in key order immediately after the build.
 - `clear()` removes all elements and releases node storage owned by the tree. Complexity depends on storage backend: `O(n)` for `.PointerBased`, `O(1)` for `.ArrayBased` and `.SplitArrayBased`, and `O(number_of_chunks)` for `.StableArrayBased`.
 - `Entry.Value` points into the tree and can be used to update the stored value. `KV.Value` is an owned value copied out from a deleted node.
 - Iterators are valid only for the tree that created them. If the node pointed to by an iterator is deleted, that iterator becomes invalid; use the iterator returned by `deleteIterator`.
@@ -187,6 +189,17 @@ pub fn main() !void {
 
     if (t.countInRange(4, 15) != 7) {
         @panic("invalid range count");
+    }
+
+    // bulk-build from strictly sorted items.
+    const sorted_items = [_]TreeType.KV{
+        .{ .Key = 20, .Value = 200 },
+        .{ .Key = 21, .Value = 210 },
+        .{ .Key = 22, .Value = 220 },
+    };
+    try t.buildFromSorted(&sorted_items);
+    if (t.getMin().?.Key != 20 or t.getMax().?.Key != 22) {
+        @panic("invalid buildFromSorted result");
     }
 
     t.clear();
