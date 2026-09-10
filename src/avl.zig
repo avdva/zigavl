@@ -452,19 +452,24 @@ fn InitTreeType(comptime K: type, comptime V: type, comptime Cache: type, compti
             }
         }
 
-        fn linkSortedLocations(self: *Self, locs: []const Location, lo: usize, hi: usize, parent_loc: ?Location) ?Location {
+        fn linkSortedLocations(self: *Self, locs: []const Location, lo: usize, hi: usize) ?Location {
             if (lo == hi) {
                 return null;
             }
 
             const mid = lo + (hi - lo) / 2;
             var mut_loc = locs[mid];
-            self.setParent(&mut_loc, parent_loc);
 
-            const left = self.linkSortedLocations(locs, lo, mid, mut_loc);
-            const right = self.linkSortedLocations(locs, mid + 1, hi, mut_loc);
-            self.setChild(&mut_loc, .left, left);
-            self.setChild(&mut_loc, .right, right);
+            var left = self.linkSortedLocations(locs, lo, mid);
+            if (left) |*l| {
+                self.setChild(&mut_loc, .left, l.*);
+                self.setParent(l, mut_loc);
+            }
+            var right = self.linkSortedLocations(locs, mid + 1, hi);
+            if (right) |*r| {
+                self.setChild(&mut_loc, .right, r.*);
+                self.setParent(r, mut_loc);
+            }
 
             _ = self.recalcHeight(mut_loc);
             if (options.countChildren) {
@@ -507,7 +512,7 @@ fn InitTreeType(comptime K: type, comptime V: type, comptime Cache: type, compti
             }
 
             self.length = items.len;
-            self.root = self.linkSortedLocations(locs, 0, locs.len, null);
+            self.root = self.linkSortedLocations(locs, 0, locs.len);
             self.min = locs[0];
             self.max = locs[locs.len - 1];
             if (comptime cacheCapabilities.hasOrderedStorage) {
