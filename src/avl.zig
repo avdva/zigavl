@@ -482,6 +482,9 @@ fn InitTreeType(comptime K: type, comptime V: type, comptime Cache: type, compti
         // buildFromSorted replaces the tree with the strictly sorted key/value
         // pairs in items. If items aren't sorted, or there are
         // duplicate keys, ItemsNotStrictlySorted is returned.
+        // If allocating the temporary location list fails, the existing tree is
+        // preserved. If allocating a new node fails after replacement starts,
+        // the partially built tree is discarded and this tree becomes empty.
         //
         // Time complexity: O(n). Address-based ordered caches store nodes in the
         // same order as items, so O(1) positional access and ordered-storage key
@@ -500,6 +503,7 @@ fn InitTreeType(comptime K: type, comptime V: type, comptime Cache: type, compti
             self.clear();
             var created: usize = 0;
             errdefer {
+                // Nodes are not linked yet, so cache-level destruction is enough.
                 for (locs[0..created]) |loc| {
                     self.lc.destroy(loc);
                 }
@@ -519,29 +523,6 @@ fn InitTreeType(comptime K: type, comptime V: type, comptime Cache: type, compti
                 self.storage_ordered = true;
             }
         }
-
-        // buildFromUnsorted replaces the tree with the strictly sorted key/value
-        // pairs in items. Duplicate keys are rejected.
-        //
-        // Time complexity: O(n*logn). Address-based ordered caches store nodes in the
-        // same order as items, so O(1) positional access and ordered-storage key
-        // lookup are available immediately after the build.
-        // pub fn buildFromUnsorted(self: *Self, items: []const KV) !void {
-        //     if (items.len == 0) {
-        //         self.clear();
-        //         return;
-        //     }
-
-        //     const lessThanFn = struct {
-        //         fn less(a: KV, b: KV) bool {
-        //             return Comparer(a.Key, b.Key) == .lt;
-        //         }
-        //     }.less;
-        //     var items_mut = items;
-        //     std.sort.heap(KV, items_mut, .{}, lessThanFn);
-        //     try validateStrictlySorted(items);
-        //     try self.buildFromSorted(items);
-        // }
 
         // compactStorage asks the backing node cache to release storage kept by
         // removed nodes, when that cache supports compaction. It may move nodes,
