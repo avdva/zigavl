@@ -20,6 +20,15 @@ fn makeKeys(a: std.mem.Allocator, n: usize, shuffle: bool) ![]i64 {
     return keys;
 }
 
+fn makeSortedItems(comptime Tree: type, a: std.mem.Allocator, n: usize) ![]Tree.KV {
+    const items = try a.alloc(Tree.KV, n);
+    for (items, 0..) |*item, idx| {
+        const key: i64 = @intCast(idx);
+        item.* = .{ .Key = key, .Value = key };
+    }
+    return items;
+}
+
 fn shouldRun(filter: ?[]const u8, name: []const u8) bool {
     return filter == null or std.mem.indexOf(u8, name, filter.?) != null;
 }
@@ -106,6 +115,22 @@ fn benchRandomInsert(comptime name: []const u8, comptime options: zigavl.Options
         checksum += result.v.*;
     }
     report(bench_name, keys.len, nowNs() - start, checksum);
+}
+
+fn benchBuildFromSorted(comptime name: []const u8, comptime options: zigavl.Options, a: std.mem.Allocator) !void {
+    const bench_name = name ++ "/buildFromSorted";
+    const Tree = zigavl.TreeWithOptions(i64, i64, i64Cmp, options);
+    const items = try makeSortedItems(Tree, a, bench_len);
+    defer a.free(items);
+
+    var tree = try Tree.init(a);
+    defer tree.deinit();
+
+    const start = nowNs();
+    try tree.buildFromSorted(items);
+    const mid_key: i64 = @intCast(bench_len / 2);
+    const checksum = tree.getMin().?.Key + tree.getMax().?.Key + tree.get(mid_key).?.*;
+    report(bench_name, bench_len, nowNs() - start, checksum);
 }
 
 fn benchRandomGet(comptime name: []const u8, comptime options: zigavl.Options, a: std.mem.Allocator, keys: []const i64) !void {
@@ -379,6 +404,7 @@ fn benchGetOrderedStorage(comptime name: []const u8, comptime options: zigavl.Op
 fn benchTree(comptime name: []const u8, comptime options: zigavl.Options, a: std.mem.Allocator, random_keys: []const i64, filter: ?[]const u8) !void {
     if (shouldRun(filter, name ++ "/insert/sequential")) try benchSequentialInsert(name, options, a);
     if (shouldRun(filter, name ++ "/insert/random")) try benchRandomInsert(name, options, a, random_keys);
+    if (shouldRun(filter, name ++ "/buildFromSorted")) try benchBuildFromSorted(name, options, a);
     if (shouldRun(filter, name ++ "/get/random")) try benchRandomGet(name, options, a, random_keys);
     if (shouldRun(filter, name ++ "/delete/random")) try benchRandomDelete(name, options, a, random_keys);
     if (shouldRun(filter, name ++ "/updateKey/random")) try benchRandomUpdateKey(name, options, a, random_keys);

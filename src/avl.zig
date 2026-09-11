@@ -368,6 +368,7 @@ fn InitTreeType(comptime K: type, comptime V: type, comptime Cache: type, compti
             }
         };
 
+        a: std.mem.Allocator,
         io: InitOptions,
         lc: Cache,
         length: usize,
@@ -384,6 +385,7 @@ fn InitTreeType(comptime K: type, comptime V: type, comptime Cache: type, compti
         // initWithOptions initializes the tree with given options.
         pub fn initWithOptions(a: std.mem.Allocator, io: InitOptions) !Self {
             return Self{
+                .a = a,
                 .lc = try Cache.init(a),
                 .length = 0,
                 .root = null,
@@ -437,6 +439,89 @@ fn InitTreeType(comptime K: type, comptime V: type, comptime Cache: type, compti
                 self.destroyAllNodes();
             }
             self.resetTreeLinks();
+        }
+
+        fn validateStrictlySorted(items: []const KV) !void {
+            if (items.len == 0) {
+                return;
+            }
+            for (items[1..], 1..) |item, idx| {
+                if (Comparer(items[idx - 1].Key, item.Key) != .lt) {
+                    return error.ItemsNotStrictlySorted;
+                }
+            }
+        }
+
+        fn linkSortedLocations(self: *Self, locs: []const Location, lo: usize, hi: usize) ?Location {
+            if (lo == hi) {
+                return null;
+            }
+
+            const mid = lo + (hi - lo) / 2;
+            var mut_loc = locs[mid];
+
+            var left = self.linkSortedLocations(locs, lo, mid);
+            if (left) |*l| {
+                self.setChild(&mut_loc, .left, l.*);
+                self.setParent(l, mut_loc);
+            }
+            var right = self.linkSortedLocations(locs, mid + 1, hi);
+            if (right) |*r| {
+                self.setChild(&mut_loc, .right, r.*);
+                self.setParent(r, mut_loc);
+            }
+
+            _ = self.recalcHeight(mut_loc);
+            if (options.countChildren) {
+                self.recalcCounts(mut_loc);
+            }
+
+            return mut_loc;
+        }
+
+        // buildFromSorted replaces the tree with the strictly sorted key/value
+        // pairs in items. If items aren't sorted, or there are
+        // duplicate keys, ItemsNotStrictlySorted is returned.
+        // If allocating the temporary location list fails, the existing tree is
+        // preserved. If allocating a new node fails after replacement starts,
+        // the partially built tree is discarded and this tree becomes empty.
+        //
+        // Time complexity: O(n). Address-based ordered caches store nodes in the
+        // same order as items, so O(1) positional access and ordered-storage key
+        // lookup are available immediately after the build.
+        pub fn buildFromSorted(self: *Self, items: []const KV) !void {
+            try validateStrictlySorted(items);
+
+            if (items.len == 0) {
+                self.clear();
+                return;
+            }
+
+            const locs = try self.a.alloc(Location, items.len);
+            defer self.a.free(locs);
+
+            self.clear();
+            var created: usize = 0;
+            errdefer {
+                // Nodes are not linked yet, so cache-level destruction is enough.
+                for (locs[0..created]) |loc| {
+                    self.lc.destroy(loc);
+                }
+                self.resetTreeLinks();
+            }
+
+            for (items, 0..) |item, idx| {
+                locs[idx] = try self.createNewNode(item.Key, item.Value);
+                created += 1;
+            }
+
+            self.length = items.len;
+            self.root = self.linkSortedLocations(locs, 0, locs.len);
+            self.min = locs[0];
+            self.max = locs[locs.len - 1];
+            if (comptime cacheCapabilities.hasOrderedStorage) {
+                self.storage_ordered = true;
+            }
         }
 
         // compactStorage asks the backing node cache to release storage kept by
@@ -1607,6 +1692,147 @@ test "tree clear across options" {
     try testTreeClear(.{ .countChildren = false, .nodeCacheType = .SplitArrayBased });
     try testTreeClear(.{ .countChildren = true, .nodeCacheType = .SplitArrayBased });
 }
+
+fn testTreeBuildFromSortedWithItems(comptime TreeType: type, t: *TreeType, items: []const TreeType.KV, comptime shouldBeOrdered: bool) !void {
+    const sentinel = 99999;
+    _ = try t.insert(sentinel, 990);
+
+    try t.buildFromSorted(items);
+    try checkHeightAndBalance(t);
+
+    try std.testing.expectEqual(items.len, t.len());
+    try std.testing.expectEqual(@as(?*i64, null), t.get(sentinel));
+    if (items.len == 0) {
+        return;
+    }
+
+    try std.testing.expectEqual(@as(i64, items[0].Key), t.getMin().?.Key);
+    try std.testing.expectEqual(@as(i64, items[items.len - 1].Key), t.getMax().?.Key);
+
+    for (items, 0..) |item, idx| {
+        try std.testing.expectEqual(item.Value, t.get(item.Key).?.*);
+        try std.testing.expectEqual(item.Key, t.at(idx).Key);
+        try std.testing.expectEqual(item.Value, t.at(idx).Value.*);
+        try std.testing.expectEqual(@as(?usize, idx), t.rank(item.Key));
+    }
+
+    var it = t.iteratorAtFirst();
+    for (items) |item| {
+        const entry = it.value() orelse return error.MissingEntry;
+        try std.testing.expectEqual(item.Key, entry.Key);
+        try std.testing.expectEqual(item.Value, entry.Value.*);
+        it.next();
+    }
+    try std.testing.expectEqual(@as(?TreeType.Entry, null), it.value());
+
+    if (shouldBeOrdered) {
+        for (items, 0..) |item, idx| {
+            const loc = t.lc.locationAt(idx);
+            try std.testing.expectEqual(item.Key, t.keyPtr(loc).*);
+        }
+    }
+}
+
+fn testTreeBuildFromSorted(comptime options: Options) !void {
+    const a = std.testing.allocator;
+    const TreeType = TreeWithOptions(i64, i64, i64Cmp, options);
+    var t = try TreeType.init(a);
+    defer t.deinit();
+    const shouldBeOrdered = options.nodeCacheType == .ArrayBased or
+        options.nodeCacheType == .StableArrayBased or
+        options.nodeCacheType == .SplitArrayBased;
+
+    try testTreeBuildFromSortedWithItems(TreeType, &t, &[_]TreeType.KV{
+        .{ .Key = 0, .Value = 0 },
+        .{ .Key = 2, .Value = 20 },
+        .{ .Key = 4, .Value = 40 },
+        .{ .Key = 6, .Value = 60 },
+        .{ .Key = 8, .Value = 80 },
+        .{ .Key = 10, .Value = 100 },
+        .{ .Key = 12, .Value = 120 },
+        .{ .Key = 14, .Value = 140 },
+    }, shouldBeOrdered);
+
+    t.clear();
+    try testTreeBuildFromSortedWithItems(TreeType, &t, &[_]TreeType.KV{
+        .{ .Key = 0, .Value = 0 },
+        .{ .Key = 1, .Value = 0 },
+        .{ .Key = 2, .Value = 0 },
+    }, shouldBeOrdered);
+
+    t.clear();
+    try testTreeBuildFromSortedWithItems(TreeType, &t, &[_]TreeType.KV{
+        .{ .Key = 0, .Value = 0 },
+    }, shouldBeOrdered);
+}
+
+test "tree buildFromSorted across options" {
+    try testTreeBuildFromSorted(.{ .countChildren = false, .nodeCacheType = .PointerBased });
+    try testTreeBuildFromSorted(.{ .countChildren = true, .nodeCacheType = .PointerBased });
+    try testTreeBuildFromSorted(.{ .countChildren = false, .nodeCacheType = .ArrayBased });
+    try testTreeBuildFromSorted(.{ .countChildren = true, .nodeCacheType = .ArrayBased });
+    try testTreeBuildFromSorted(.{ .countChildren = false, .nodeCacheType = .StableArrayBased });
+    try testTreeBuildFromSorted(.{ .countChildren = true, .nodeCacheType = .StableArrayBased });
+    try testTreeBuildFromSorted(.{ .countChildren = false, .nodeCacheType = .SplitArrayBased });
+    try testTreeBuildFromSorted(.{ .countChildren = true, .nodeCacheType = .SplitArrayBased });
+}
+
+test "tree buildFromSorted rejects unsorted input without clearing tree" {
+    const a = std.testing.allocator;
+    const TreeType = Tree(i64, i64, i64Cmp);
+    var t = try TreeType.init(a);
+    defer t.deinit();
+
+    _ = try t.insert(42, 420);
+
+    const duplicate_items = [_]TreeType.KV{
+        .{ .Key = 1, .Value = 10 },
+        .{ .Key = 1, .Value = 11 },
+    };
+    try std.testing.expectError(error.ItemsNotStrictlySorted, t.buildFromSorted(&duplicate_items));
+    try std.testing.expectEqual(@as(usize, 1), t.len());
+    try std.testing.expectEqual(@as(i64, 420), t.get(42).?.*);
+
+    const unsorted_items = [_]TreeType.KV{
+        .{ .Key = 2, .Value = 20 },
+        .{ .Key = 1, .Value = 10 },
+    };
+    try std.testing.expectError(error.ItemsNotStrictlySorted, t.buildFromSorted(&unsorted_items));
+    try std.testing.expectEqual(@as(usize, 1), t.len());
+    try std.testing.expectEqual(@as(i64, 420), t.get(42).?.*);
+}
+
+test "tree buildFromSorted accepts empty input" {
+    const a = std.testing.allocator;
+    const TreeType = Tree(i64, i64, i64Cmp);
+    var t = try TreeType.init(a);
+    defer t.deinit();
+
+    _ = try t.insert(42, 420);
+    const empty_items = [_]TreeType.KV{};
+    try t.buildFromSorted(&empty_items);
+
+    try std.testing.expectEqual(@as(usize, 0), t.len());
+    try std.testing.expectEqual(@as(?TreeType.Entry, null), t.getMin());
+    try std.testing.expectEqual(@as(?TreeType.Entry, null), t.getMax());
+}
+
+// test "tree buildFromUnsorted rejects duplicate keys input without clearing tree" {
+//     const a = std.testing.allocator;
+//     const TreeType = Tree(i64, i64, i64Cmp);
+//     var t = try TreeType.init(a);
+//     defer t.deinit();
+
+//     _ = try t.insert(42, 420);
+
+//     const duplicate_items = [_]TreeType.KV{
+//         .{ .Key = 1, .Value = 10 },
+//         .{ .Key = 1, .Value = 11 },
+//     };
+//     try std.testing.expectError(error.ItemsNotStrictlySorted, t.buildFromUnsorted(&duplicate_items));
+//     try std.testing.expectEqual(@as(usize, 1), t.len());
+//     try std.testing.expectEqual(@as(i64, 420), t.get(42).?.*);
+// }
 
 fn testTreeReclaimSearchable(comptime options: Options) !void {
     const a = std.testing.allocator;
