@@ -1817,23 +1817,6 @@ test "tree buildFromSorted accepts empty input" {
     try std.testing.expectEqual(@as(?TreeType.Entry, null), t.getMax());
 }
 
-// test "tree buildFromUnsorted rejects duplicate keys input without clearing tree" {
-//     const a = std.testing.allocator;
-//     const TreeType = Tree(i64, i64, i64Cmp);
-//     var t = try TreeType.init(a);
-//     defer t.deinit();
-
-//     _ = try t.insert(42, 420);
-
-//     const duplicate_items = [_]TreeType.KV{
-//         .{ .Key = 1, .Value = 10 },
-//         .{ .Key = 1, .Value = 11 },
-//     };
-//     try std.testing.expectError(error.ItemsNotStrictlySorted, t.buildFromUnsorted(&duplicate_items));
-//     try std.testing.expectEqual(@as(usize, 1), t.len());
-//     try std.testing.expectEqual(@as(i64, 420), t.get(42).?.*);
-// }
-
 fn testTreeReclaimSearchable(comptime options: Options) !void {
     const a = std.testing.allocator;
     const TreeType = TreeWithOptions(i64, i64, i64Cmp, options);
