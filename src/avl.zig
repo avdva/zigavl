@@ -1243,10 +1243,28 @@ fn InitTreeType(comptime K: type, comptime V: type, comptime Cache: type, compti
             while (mutLoc) |*mlPtr| {
                 const l = mlPtr.*;
                 const parent_loc = self.parent(l);
-                switch (self.balance(l)) {
+                // Reuse child metadata for balance, height, and descendant count.
+                // Rotations recalculate metadata after changing the links.
+                const left = self.child(l, .left);
+                const right = self.child(l, .right);
+                var left_height: u8 = 0;
+                var right_height: u8 = 0;
+                var count: u32 = 0;
+                if (left) |child_loc| {
+                    const m = self.meta(child_loc);
+                    left_height = m.height.* + 1;
+                    if (options.countChildren) count += 1 + m.tags.childrenCount;
+                }
+                if (right) |child_loc| {
+                    const m = self.meta(child_loc);
+                    right_height = m.height.* + 1;
+                    if (options.countChildren) count += 1 + m.tags.childrenCount;
+                }
+                const b = @as(i8, @intCast(right_height)) - @as(i8, @intCast(left_height));
+                switch (b) {
                     -2 => {
                         const subRoot = blk: {
-                            switch (self.balance(self.child(l, .left).?)) {
+                            switch (self.balance(left.?)) {
                                 -1, 0 => {
                                     break :blk self.rr(l);
                                 },
@@ -1260,7 +1278,7 @@ fn InitTreeType(comptime K: type, comptime V: type, comptime Cache: type, compti
                     },
                     2 => {
                         const subRoot = blk: {
-                            switch (self.balance(self.child(l, .right).?)) {
+                            switch (self.balance(right.?)) {
                                 -1 => {
                                     break :blk self.rl(l);
                                 },
@@ -1273,14 +1291,15 @@ fn InitTreeType(comptime K: type, comptime V: type, comptime Cache: type, compti
                         self.treeRotated(parent_loc, l, subRoot);
                     },
                     else => {
-                        if (!self.recalcHeight(l) and !all_way_up) {
+                        const height_changed = self.setHeight(l, @max(left_height, right_height));
+                        if (options.countChildren) {
+                            self.meta(l).tags.childrenCount = count;
+                        }
+                        if (!height_changed and !all_way_up) {
                             if (options.countChildren) {
-                                self.updateCounts(l);
+                                if (parent_loc) |p| self.updateCounts(p);
                             }
                             return;
-                        }
-                        if (options.countChildren) {
-                            self.recalcCounts(l);
                         }
                     },
                 }
