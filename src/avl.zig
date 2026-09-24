@@ -288,14 +288,35 @@ fn InitTreeType(comptime K: type, comptime V: type, comptime Cache: type, compti
             self.meta(loc).tags.childrenCount = count;
         }
 
-        // updateCounts walks from loc to the root after a structural change that
+        // recalcCountsUpwards walks from loc to the root after a structural change that
         // did not require a full rebalance walk, keeping ancestor descendant counts
         // consistent for rank and position-based operations.
-        fn updateCounts(self: *Self, loc: Location) void {
-            var mutLoc: ?Location = loc;
-            while (mutLoc) |*l| {
+        fn recalcCountsUpwards(self: *Self, loc: Location) void {
+            var mut_loc: ?Location = loc;
+            while (mut_loc) |*l| {
                 self.recalcCounts(l.*);
-                mutLoc = self.parent(l.*);
+                mut_loc = self.parent(l.*);
+            }
+        }
+
+        // adjustDescendantCount applies a signed delta to loc's descendant count.
+        // The stored value is the number of descendants, not including loc itself;
+        // callers add one when they need a whole child subtree size.
+        fn adjustDescendantCount(self: *Self, loc: Location, delta: i32) void {
+            const tags = self.meta(loc).tags;
+            const adjusted = @as(i64, tags.childrenCount) + delta;
+            std.debug.assert(adjusted >= 0 and adjusted <= std.math.maxInt(u32));
+            tags.childrenCount = @intCast(adjusted);
+        }
+
+        // adjustDescendantCountsUpwards applies delta to loc and every ancestor
+        // after a structural change whose subtree size changes uniformly along
+        // that path, keeping rank and position-based operations consistent.
+        fn adjustDescendantCountsUpwards(self: *Self, loc: Location, delta: i32) void {
+            var mut_loc: ?Location = loc;
+            while (mut_loc) |*l| {
+                self.adjustDescendantCount(l.*, delta);
+                mut_loc = self.parent(l.*);
             }
         }
 
@@ -671,12 +692,12 @@ fn InitTreeType(comptime K: type, comptime V: type, comptime Cache: type, compti
                     }
                     if (self.recalcHeight(l)) {
                         if (options.countChildren) {
-                            self.recalcCounts(l);
+                            self.adjustDescendantCount(l, 1);
                         }
-                        self.checkBalance(self.parent(l), false);
+                        self.checkBalance(self.parent(l), false, 1);
                     } else {
                         if (options.countChildren) {
-                            self.updateCounts(l);
+                            self.adjustDescendantCountsUpwards(l, 1);
                         }
                     }
                 },
@@ -806,7 +827,7 @@ fn InitTreeType(comptime K: type, comptime V: type, comptime Cache: type, compti
                         self.setRoot(rep);
                     }
                     self.reparent(rep, inverted, self.childAt(loc, inverted));
-                    self.checkBalance(rep, true);
+                    self.checkBalance(rep, true, null);
                     return;
                 }
                 const replacement_child = self.childAt(rep, inverted);
@@ -818,11 +839,11 @@ fn InitTreeType(comptime K: type, comptime V: type, comptime Cache: type, compti
                 }
                 self.reparent(rep, .left, self.child(loc, .left));
                 self.reparent(rep, .right, self.child(loc, .right));
-                self.checkBalance(replacement_parent, true);
+                self.checkBalance(replacement_parent, true, null);
             } else {
                 if (parent_loc) |p| {
                     self.reparent(p, self.childDir(p, loc), replacement);
-                    self.checkBalance(p, false);
+                    self.checkBalance(p, false, -1);
                 } else {
                     self.setRoot(null);
                 }
@@ -1235,30 +1256,38 @@ fn InitTreeType(comptime K: type, comptime V: type, comptime Cache: type, compti
         // true, the walk continues to the root because the caller already knows
         // that ancestor counts/heights may need a full refresh after relinking.
         //
+        // A non-null count_delta is used when every visited subtree gains or loses
+        // the same number of nodes. A null value recomputes counts from child
+        // subtrees, which is required after moving a replacement node during delete.
+        //
         // balance(l) == -2 means the left subtree is too tall. The child balance
         // chooses a single right rotation (rr) or a double left-right rotation (lr).
         // balance(l) == 2 mirrors that with right-left (rl) or single left (ll).
-        fn checkBalance(self: *Self, loc: ?Location, all_way_up: bool) void {
-            var mutLoc = loc;
-            while (mutLoc) |*mlPtr| {
-                const l = mlPtr.*;
-                const parent_loc = self.parent(l);
+        fn checkBalance(self: *Self, loc: ?Location, all_way_up: bool, count_delta: ?i32) void {
+            var mut_loc = loc;
+            while (mut_loc) |*mut_loc_ptr| {
+                const current_loc = mut_loc_ptr.*;
+                const parent_loc = self.parent(current_loc);
                 // Reuse child metadata for balance, height, and descendant count.
                 // Rotations recalculate metadata after changing the links.
-                const left = self.child(l, .left);
-                const right = self.child(l, .right);
+                const left = self.child(current_loc, .left);
+                const right = self.child(current_loc, .right);
                 var left_height: u8 = 0;
                 var right_height: u8 = 0;
                 var count: u32 = 0;
                 if (left) |child_loc| {
                     const m = self.meta(child_loc);
                     left_height = m.height.* + 1;
-                    if (options.countChildren) count += 1 + m.tags.childrenCount;
+                    if (options.countChildren and count_delta == null) {
+                        count += 1 + m.tags.childrenCount;
+                    }
                 }
                 if (right) |child_loc| {
                     const m = self.meta(child_loc);
                     right_height = m.height.* + 1;
-                    if (options.countChildren) count += 1 + m.tags.childrenCount;
+                    if (options.countChildren and count_delta == null) {
+                        count += 1 + m.tags.childrenCount;
+                    }
                 }
                 const b = @as(i8, @intCast(right_height)) - @as(i8, @intCast(left_height));
                 switch (b) {
@@ -1266,44 +1295,54 @@ fn InitTreeType(comptime K: type, comptime V: type, comptime Cache: type, compti
                         const subRoot = blk: {
                             switch (self.balance(left.?)) {
                                 -1, 0 => {
-                                    break :blk self.rr(l);
+                                    break :blk self.rr(current_loc);
                                 },
                                 1 => {
-                                    break :blk self.lr(l);
+                                    break :blk self.lr(current_loc);
                                 },
                                 else => unreachable,
                             }
                         };
-                        self.treeRotated(parent_loc, l, subRoot);
+                        self.treeRotated(parent_loc, current_loc, subRoot);
                     },
                     2 => {
                         const subRoot = blk: {
                             switch (self.balance(right.?)) {
                                 -1 => {
-                                    break :blk self.rl(l);
+                                    break :blk self.rl(current_loc);
                                 },
                                 0, 1 => {
-                                    break :blk self.ll(l);
+                                    break :blk self.ll(current_loc);
                                 },
                                 else => unreachable,
                             }
                         };
-                        self.treeRotated(parent_loc, l, subRoot);
+                        self.treeRotated(parent_loc, current_loc, subRoot);
                     },
                     else => {
-                        const height_changed = self.setHeight(l, @max(left_height, right_height));
+                        const height_changed = self.setHeight(current_loc, @max(left_height, right_height));
                         if (options.countChildren) {
-                            self.meta(l).tags.childrenCount = count;
+                            if (count_delta) |delta| {
+                                self.adjustDescendantCount(current_loc, delta);
+                            } else {
+                                self.meta(current_loc).tags.childrenCount = count;
+                            }
                         }
                         if (!height_changed and !all_way_up) {
                             if (options.countChildren) {
-                                if (parent_loc) |p| self.updateCounts(p);
+                                if (parent_loc) |p| {
+                                    if (count_delta) |delta| {
+                                        self.adjustDescendantCountsUpwards(p, delta);
+                                    } else {
+                                        self.recalcCountsUpwards(p);
+                                    }
+                                }
                             }
                             return;
                         }
                     },
                 }
-                mutLoc = parent_loc;
+                mut_loc = parent_loc;
             }
         }
 
@@ -2821,6 +2860,10 @@ test "tree random (pointer cache)" {
 
 test "tree random (array cache)" {
     try testTreeRandom(.{ .countChildren = true, .nodeCacheType = .ArrayBased });
+}
+
+test "tree random (stable array cache)" {
+    try testTreeRandom(.{ .countChildren = true, .nodeCacheType = .StableArrayBased });
 }
 
 test "tree random (split array cache)" {
