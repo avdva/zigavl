@@ -78,6 +78,16 @@ pub fn LocationCache(comptime K: type, comptime V: type, comptime Tags: type) ty
             self.free_count = 0;
         }
 
+        // reserveNodes ensures that count more create calls can succeed without
+        // growing the backing array. Existing free slots count toward the reserve.
+        pub fn reserveNodes(self: *Self, count: usize) !void {
+            const additional = count -| self.free_count;
+            if (additional == 0) return;
+            const required_len = std.math.add(usize, self.nodes.items.len, additional) catch return error.OutOfMemory;
+            if (required_len > @as(usize, InvalidAddr)) return error.OutOfMemory;
+            try self.nodes.ensureTotalCapacity(self.a, required_len);
+        }
+
         pub fn create(self: *Self) !Location {
             if (self.free_head != InvalidAddr) {
                 const addr = self.free_head;
@@ -275,4 +285,18 @@ test "locationcache reclaim preserves spare capacity" {
 
     try std.testing.expectEqual(l2, lc.reclaim(200, l2).?);
     try std.testing.expectEqual(capacity_before, lc.nodes.capacity);
+}
+
+test "locationcache reserveNodes" {
+    const a = std.testing.allocator;
+    const LocationType = LocationCache(i64, i64, struct {});
+    var lc = try LocationType.init(a);
+    defer lc.deinit();
+
+    try lc.reserveNodes(3);
+    const capacity = lc.nodes.capacity;
+    for (0..3) |_| {
+        _ = try lc.create();
+        try std.testing.expectEqual(capacity, lc.nodes.capacity);
+    }
 }

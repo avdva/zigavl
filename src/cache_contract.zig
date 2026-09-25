@@ -143,6 +143,7 @@ pub const Capabilities = struct {
     hasFastClear: bool,
     hasCompactStorage: bool,
     hasOrderedStorage: bool,
+    hasNodeReservation: bool,
 };
 
 pub fn getCapabilities(comptime Cache: type) Capabilities {
@@ -154,6 +155,7 @@ pub fn getCapabilities(comptime Cache: type) Capabilities {
             @hasDecl(Cache, "locationAt") and
             @hasDecl(Cache, "nextLocation") and
             @hasDecl(Cache, "prevLocation"),
+        .hasNodeReservation = @hasDecl(Cache, "reserveNodes"),
     };
 }
 
