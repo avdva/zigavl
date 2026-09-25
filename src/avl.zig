@@ -504,8 +504,9 @@ fn InitTreeType(comptime K: type, comptime V: type, comptime Cache: type, compti
         // pairs in items. If items aren't sorted, or there are
         // duplicate keys, ItemsNotStrictlySorted is returned.
         // If allocating the temporary location list fails, the existing tree is
-        // preserved. If allocating a new node fails after replacement starts,
-        // the partially built tree is discarded and this tree becomes empty.
+        // preserved. If preparing replacement storage or allocating a new node
+        // fails after replacement starts, the partially built tree is discarded
+        // and this tree becomes empty.
         //
         // Time complexity: O(n). Address-based ordered caches store nodes in the
         // same order as items, so O(1) positional access and ordered-storage key
@@ -522,6 +523,9 @@ fn InitTreeType(comptime K: type, comptime V: type, comptime Cache: type, compti
             defer self.a.free(locs);
 
             self.clear();
+            if (comptime cacheCapabilities.hasNodeReservation) {
+                try self.lc.reserveNodes(items.len);
+            }
             var created: usize = 0;
             errdefer {
                 // Nodes are not linked yet, so cache-level destruction is enough.

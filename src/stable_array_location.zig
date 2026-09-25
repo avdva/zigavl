@@ -93,6 +93,23 @@ pub fn LocationCache(comptime K: type, comptime V: type, comptime Tags: type) ty
             self.free_count = 0;
         }
 
+        // reserveNodes allocates enough chunks for count more create calls.
+        // Existing free slots count toward the reserve, and allocated chunks remain
+        // available if a later allocation fails.
+        pub fn reserveNodes(self: *Self, count: usize) !void {
+            const additional = count -| self.free_count;
+            if (additional == 0) return;
+            const required_len = std.math.add(usize, self.len, additional) catch return error.OutOfMemory;
+            if (required_len > @as(usize, InvalidAddr)) return error.OutOfMemory;
+
+            const required_chunks = std.math.divCeil(usize, required_len, chunk_len) catch unreachable;
+            try self.chunks.ensureTotalCapacity(self.a, required_chunks);
+            while (self.chunks.items.len < required_chunks) {
+                const chunk = try self.a.create(Chunk);
+                self.chunks.appendAssumeCapacity(chunk);
+            }
+        }
+
         pub fn create(self: *Self) !Location {
             if (self.free_head != InvalidAddr) {
                 const addr = self.free_head;
@@ -329,4 +346,18 @@ test "stable locationcache reclaim frees tail chunks" {
     try std.testing.expectEqual(@as(u32, 1), moved_anchor.addr);
     try std.testing.expectEqual(@as(i64, 500), lc.slot(0).used.data.k);
     try std.testing.expectEqual(@as(i64, @intCast(locs.len - 1)), lc.slot(1).used.data.k);
+}
+
+test "stable locationcache reserveNodes" {
+    const a = std.testing.allocator;
+    const LocationType = LocationCache(i64, i64, struct {});
+    var lc = try LocationType.init(a);
+    defer lc.deinit();
+
+    try lc.reserveNodes(1025);
+    try std.testing.expectEqual(@as(usize, 2), lc.chunks.items.len);
+    for (0..1025) |_| {
+        _ = try lc.create();
+        try std.testing.expectEqual(@as(usize, 2), lc.chunks.items.len);
+    }
 }
