@@ -401,6 +401,55 @@ fn benchGetOrderedStorage(comptime name: []const u8, comptime options: zigavl.Op
     report(bench_name, keys.len, nowNs() - start, checksum);
 }
 
+fn benchOrderedAppendMaximumAndGet(comptime name: []const u8, comptime options: zigavl.Options, a: std.mem.Allocator, keys: []const i64) !void {
+    const bench_name = name ++ "/ordered-storage/append-maximum-and-get";
+    const Tree = zigavl.TreeWithOptions(i64, i64, i64Cmp, options);
+    var tree = try Tree.init(a);
+    defer tree.deinit();
+
+    for (0..bench_len) |idx| {
+        const key: i64 = @intCast(idx);
+        _ = try tree.insert(key, key);
+    }
+    tree.orderStorageByKey();
+
+    const offset: i64 = @intCast(bench_len);
+    var checksum: i64 = 0;
+    const start = nowNs();
+    for (keys, 0..) |key, idx| {
+        const maximum = offset + @as(i64, @intCast(idx));
+        _ = try tree.insert(maximum, maximum);
+        checksum += tree.get(key).?.*;
+    }
+    report(bench_name, keys.len, nowNs() - start, checksum);
+}
+
+fn benchOrderedRemoveMaximumAndGet(comptime name: []const u8, comptime options: zigavl.Options, a: std.mem.Allocator, keys: []const i64) !void {
+    const bench_name = name ++ "/ordered-storage/remove-maximum-and-get";
+    const Tree = zigavl.TreeWithOptions(i64, i64, i64Cmp, options);
+    var tree = try Tree.init(a);
+    defer tree.deinit();
+
+    for (0..bench_len) |idx| {
+        const key: i64 = @intCast(idx);
+        _ = try tree.insert(key, key);
+    }
+    tree.orderStorageByKey();
+
+    var checksum: i64 = 0;
+    const start = nowNs();
+    for (keys, 0..) |key, idx| {
+        const remaining = bench_len - idx;
+        const maximum: i64 = @intCast(remaining - 1);
+        checksum += tree.delete(maximum).?;
+        if (remaining > 1) {
+            const remaining_key = @mod(key, @as(i64, @intCast(remaining - 1)));
+            checksum += tree.get(remaining_key).?.*;
+        }
+    }
+    report(bench_name, keys.len, nowNs() - start, checksum);
+}
+
 fn benchTree(comptime name: []const u8, comptime options: zigavl.Options, a: std.mem.Allocator, random_keys: []const i64, filter: ?[]const u8) !void {
     if (shouldRun(filter, name ++ "/insert/sequential")) try benchSequentialInsert(name, options, a);
     if (shouldRun(filter, name ++ "/insert/random")) try benchRandomInsert(name, options, a, random_keys);
@@ -424,6 +473,8 @@ fn benchTree(comptime name: []const u8, comptime options: zigavl.Options, a: std
         if (shouldRun(filter, name ++ "/at/ordered")) try benchAtOrdered(name, options, a);
         if (shouldRun(filter, name ++ "/at/ordered-including-order")) try benchAtOrderedIncludingOrder(name, options, a);
         if (shouldRun(filter, name ++ "/get/ordered-storage")) try benchGetOrderedStorage(name, options, a, random_keys);
+        if (shouldRun(filter, name ++ "/ordered-storage/append-maximum-and-get")) try benchOrderedAppendMaximumAndGet(name, options, a, random_keys);
+        if (shouldRun(filter, name ++ "/ordered-storage/remove-maximum-and-get")) try benchOrderedRemoveMaximumAndGet(name, options, a, random_keys);
     }
 }
 
