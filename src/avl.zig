@@ -567,7 +567,8 @@ fn InitTreeType(comptime K: type, comptime V: type, comptime Cache: type, compti
 
         // orderStorageByKey moves nodes in address-based caches so sorted
         // position N is stored at address N. This enables O(1) lookup by sorted
-        // index until the next structural mutation. It may move nodes,
+        // index until a structural mutation other than appending or removing
+        // the maximum key. It may move nodes,
         // invalidating existing iterators, locations, entries, and value pointers.
         // Caches without ordering support leave the tree untouched.
         pub fn orderStorageByKey(self: *Self) void {
@@ -680,9 +681,33 @@ fn InitTreeType(comptime K: type, comptime V: type, comptime Cache: type, compti
             };
         }
 
-        fn insertNew(self: *Self, where: LocateResult, new_loc: Location) void {
+        // appendsToOrderedStorage reports whether new_loc extends the dense,
+        // key-ordered storage suffix. AVL rotations only change links, so that
+        // physical key order remains valid when a new maximum is appended.
+        fn appendsToOrderedStorage(self: *Self, where: LocateResult, new_loc: Location) bool {
             if (comptime cacheCapabilities.hasOrderedStorage) {
-                self.storage_ordered = false;
+                if (!self.storage_ordered or where.dir != .right) return false;
+                const parent_loc = where.loc orelse return false;
+                return self.locEq(parent_loc, self.max.?) and
+                    self.locEq(new_loc, self.lc.locationAt(self.length));
+            }
+            return false;
+        }
+
+        // removesLastFromOrderedStorage reports whether loc is the last dense
+        // storage slot. Only deleting the maximum can preserve key order without
+        // moving the remaining nodes.
+        fn removesLastFromOrderedStorage(self: *Self, loc: Location) bool {
+            if (comptime cacheCapabilities.hasOrderedStorage) {
+                return self.storage_ordered and self.locEq(loc, self.max.?);
+            }
+            return false;
+        }
+
+        fn insertNew(self: *Self, where: LocateResult, new_loc: Location) void {
+            const keeps_storage_ordered = self.appendsToOrderedStorage(where, new_loc);
+            if (comptime cacheCapabilities.hasOrderedStorage) {
+                self.storage_ordered = keeps_storage_ordered;
             }
             self.length += 1;
             switch (where.dir) {
@@ -714,10 +739,18 @@ fn InitTreeType(comptime K: type, comptime V: type, comptime Cache: type, compti
         }
 
         fn deleteLocation(self: *Self, loc: Location) void {
+            const keeps_storage_ordered = self.removesLastFromOrderedStorage(loc);
             if (comptime cacheCapabilities.hasOrderedStorage) {
-                self.storage_ordered = false;
+                self.storage_ordered = keeps_storage_ordered;
             }
             self.deleteAndReplace(loc);
+            if (comptime cacheCapabilities.hasOrderedStorage) {
+                if (keeps_storage_ordered) {
+                    self.lc.finishOrderStorage(self.length);
+                    self.storage_ordered = self.length != 0;
+                    return;
+                }
+            }
             self.lc.destroy(loc);
         }
 
@@ -2006,6 +2039,74 @@ test "tree orderStorageByKey orders address caches by sorted key" {
     try testTreeOrderStorageByKey(.{ .countChildren = true, .nodeCacheType = .StableArrayBased });
     try testTreeOrderStorageByKey(.{ .countChildren = false, .nodeCacheType = .SplitArrayBased });
     try testTreeOrderStorageByKey(.{ .countChildren = true, .nodeCacheType = .SplitArrayBased });
+}
+
+fn expectOrderedStorageKeys(t: anytype, expected: []const i64) !void {
+    try std.testing.expect(t.storage_ordered);
+    try std.testing.expectEqual(expected.len, t.len());
+    try std.testing.expectEqual(expected.len, t.lc.slotsLen());
+    try std.testing.expectEqual(@as(usize, 0), t.lc.freeCount());
+    try std.testing.expectEqual(@TypeOf(t.lc).InvalidAddr, t.lc.freeHead());
+    for (expected, 0..) |key, idx| {
+        try std.testing.expectEqual(key, t.lc.keyPtr(t.lc.locationAt(idx)).*);
+        try std.testing.expectEqual(key, t.at(idx).Key);
+        try std.testing.expectEqual(key * 10, t.get(key).?.*);
+    }
+    try checkHeightAndBalance(t);
+}
+
+fn testTreeOrderedStorageTailMutations(comptime options: Options) !void {
+    const a = std.testing.allocator;
+    const TreeType = TreeWithOptions(i64, i64, i64Cmp, options);
+    var t = try TreeType.init(a);
+    defer t.deinit();
+
+    // The maximum has a left child, so deleting it exercises replacement logic.
+    for ([_]i64{ 10, 5, 15, 12 }) |key| {
+        _ = try t.insert(key, key * 10);
+    }
+    t.orderStorageByKey();
+    try expectOrderedStorageKeys(&t, &.{ 5, 10, 12, 15 });
+
+    _ = try t.insert(20, 200);
+    try expectOrderedStorageKeys(&t, &.{ 5, 10, 12, 15, 20 });
+
+    try std.testing.expectEqual(@as(i64, 200), t.delete(20).?);
+    try expectOrderedStorageKeys(&t, &.{ 5, 10, 12, 15 });
+
+    try std.testing.expectEqual(@as(i64, 150), t.delete(15).?);
+    try expectOrderedStorageKeys(&t, &.{ 5, 10, 12 });
+
+    const deleted = t.deleteAt(t.len() - 1);
+    try std.testing.expectEqual(@as(i64, 12), deleted.Key);
+    try expectOrderedStorageKeys(&t, &.{ 5, 10 });
+
+    _ = t.deleteAt(t.len() - 1);
+    try expectOrderedStorageKeys(&t, &.{5});
+    _ = t.deleteAt(t.len() - 1);
+    try std.testing.expect(!t.storage_ordered);
+    try std.testing.expectEqual(@as(usize, 0), t.len());
+    try std.testing.expectEqual(@as(usize, 0), t.lc.slotsLen());
+
+    for ([_]i64{ 5, 10, 15 }) |key| {
+        _ = try t.insert(key, key * 10);
+    }
+    t.orderStorageByKey();
+    _ = t.delete(10);
+    try std.testing.expect(!t.storage_ordered);
+
+    t.orderStorageByKey();
+    _ = try t.insert(12, 120);
+    try std.testing.expect(!t.storage_ordered);
+}
+
+test "tree ordered storage survives tail mutations" {
+    try testTreeOrderedStorageTailMutations(.{ .countChildren = false, .nodeCacheType = .ArrayBased });
+    try testTreeOrderedStorageTailMutations(.{ .countChildren = true, .nodeCacheType = .ArrayBased });
+    try testTreeOrderedStorageTailMutations(.{ .countChildren = false, .nodeCacheType = .StableArrayBased });
+    try testTreeOrderedStorageTailMutations(.{ .countChildren = true, .nodeCacheType = .StableArrayBased });
+    try testTreeOrderedStorageTailMutations(.{ .countChildren = false, .nodeCacheType = .SplitArrayBased });
+    try testTreeOrderedStorageTailMutations(.{ .countChildren = true, .nodeCacheType = .SplitArrayBased });
 }
 
 test "tree orderStorageByKey is noop for pointer cache" {
