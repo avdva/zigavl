@@ -401,8 +401,8 @@ fn benchGetOrderedStorage(comptime name: []const u8, comptime options: zigavl.Op
     report(bench_name, keys.len, nowNs() - start, checksum);
 }
 
-fn benchOrderedAppendMaximum(comptime name: []const u8, comptime options: zigavl.Options, a: std.mem.Allocator, keys: []const i64) !void {
-    const bench_name = name ++ "/ordered-storage/append-maximum";
+fn benchOrderedAppendMaximumAndGet(comptime name: []const u8, comptime options: zigavl.Options, a: std.mem.Allocator, keys: []const i64) !void {
+    const bench_name = name ++ "/ordered-storage/append-maximum-and-get";
     const Tree = zigavl.TreeWithOptions(i64, i64, i64Cmp, options);
     var tree = try Tree.init(a);
     defer tree.deinit();
@@ -424,8 +424,8 @@ fn benchOrderedAppendMaximum(comptime name: []const u8, comptime options: zigavl
     report(bench_name, keys.len, nowNs() - start, checksum);
 }
 
-fn benchOrderedRemoveMaximum(comptime name: []const u8, comptime options: zigavl.Options, a: std.mem.Allocator, keys: []const i64) !void {
-    const bench_name = name ++ "/ordered-storage/remove-maximum";
+fn benchOrderedRemoveMaximumAndGet(comptime name: []const u8, comptime options: zigavl.Options, a: std.mem.Allocator, keys: []const i64) !void {
+    const bench_name = name ++ "/ordered-storage/remove-maximum-and-get";
     const Tree = zigavl.TreeWithOptions(i64, i64, i64Cmp, options);
     var tree = try Tree.init(a);
     defer tree.deinit();
@@ -473,8 +473,8 @@ fn benchTree(comptime name: []const u8, comptime options: zigavl.Options, a: std
         if (shouldRun(filter, name ++ "/at/ordered")) try benchAtOrdered(name, options, a);
         if (shouldRun(filter, name ++ "/at/ordered-including-order")) try benchAtOrderedIncludingOrder(name, options, a);
         if (shouldRun(filter, name ++ "/get/ordered-storage")) try benchGetOrderedStorage(name, options, a, random_keys);
-        if (shouldRun(filter, name ++ "/ordered-storage/append-maximum")) try benchOrderedAppendMaximum(name, options, a, random_keys);
-        if (shouldRun(filter, name ++ "/ordered-storage/remove-maximum")) try benchOrderedRemoveMaximum(name, options, a, random_keys);
+        if (shouldRun(filter, name ++ "/ordered-storage/append-maximum-and-get")) try benchOrderedAppendMaximumAndGet(name, options, a, random_keys);
+        if (shouldRun(filter, name ++ "/ordered-storage/remove-maximum-and-get")) try benchOrderedRemoveMaximumAndGet(name, options, a, random_keys);
     }
 }
 
