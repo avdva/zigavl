@@ -523,7 +523,7 @@ fn InitTreeType(comptime K: type, comptime V: type, comptime Cache: type, compti
             defer self.a.free(locs);
 
             self.clear();
-            if (comptime cacheCapabilities.hasNodeReservation) {
+            if (cacheCapabilities.hasNodeReservation) {
                 try self.lc.reserveNodes(items.len);
             }
             var created: usize = 0;
@@ -544,7 +544,7 @@ fn InitTreeType(comptime K: type, comptime V: type, comptime Cache: type, compti
             self.root = self.linkSortedLocations(locs, 0, locs.len);
             self.min = locs[0];
             self.max = locs[locs.len - 1];
-            if (comptime cacheCapabilities.hasOrderedStorage) {
+            if (cacheCapabilities.hasOrderedStorage) {
                 self.storage_ordered = true;
             }
         }
@@ -685,7 +685,7 @@ fn InitTreeType(comptime K: type, comptime V: type, comptime Cache: type, compti
         // key-ordered storage suffix. AVL rotations only change links, so that
         // physical key order remains valid when a new maximum is appended.
         fn appendsToOrderedStorage(self: *Self, where: LocateResult, new_loc: Location) bool {
-            if (comptime cacheCapabilities.hasOrderedStorage) {
+            if (cacheCapabilities.hasOrderedStorage) {
                 if (!self.storage_ordered or where.dir != .right) return false;
                 const parent_loc = where.loc orelse return false;
                 return self.locEq(parent_loc, self.max.?) and
@@ -698,7 +698,7 @@ fn InitTreeType(comptime K: type, comptime V: type, comptime Cache: type, compti
         // storage slot. Only deleting the maximum can preserve key order without
         // moving the remaining nodes.
         fn removesLastFromOrderedStorage(self: *Self, loc: Location) bool {
-            if (comptime cacheCapabilities.hasOrderedStorage) {
+            if (cacheCapabilities.hasOrderedStorage) {
                 return self.storage_ordered and self.locEq(loc, self.max.?);
             }
             return false;
@@ -706,7 +706,7 @@ fn InitTreeType(comptime K: type, comptime V: type, comptime Cache: type, compti
 
         fn insertNew(self: *Self, where: LocateResult, new_loc: Location) void {
             const keeps_storage_ordered = self.appendsToOrderedStorage(where, new_loc);
-            if (comptime cacheCapabilities.hasOrderedStorage) {
+            if (cacheCapabilities.hasOrderedStorage) {
                 self.storage_ordered = keeps_storage_ordered;
             }
             self.length += 1;
@@ -740,11 +740,11 @@ fn InitTreeType(comptime K: type, comptime V: type, comptime Cache: type, compti
 
         fn deleteLocation(self: *Self, loc: Location) void {
             const keeps_storage_ordered = self.removesLastFromOrderedStorage(loc);
-            if (comptime cacheCapabilities.hasOrderedStorage) {
+            if (cacheCapabilities.hasOrderedStorage) {
                 self.storage_ordered = keeps_storage_ordered;
             }
             self.deleteAndReplace(loc);
-            if (comptime cacheCapabilities.hasOrderedStorage) {
+            if (cacheCapabilities.hasOrderedStorage) {
                 if (keeps_storage_ordered) {
                     self.lc.finishOrderStorage(self.length);
                     self.storage_ordered = self.length != 0;
@@ -946,6 +946,13 @@ fn InitTreeType(comptime K: type, comptime V: type, comptime Cache: type, compti
         // lowerBound returns an iterator positioned at the first element whose key is not less than k.
         // Time complexity: O(logn).
         pub fn lowerBound(self: *Self, k: K) Iterator {
+            if (cacheCapabilities.hasOrderedStorage) {
+                if (self.storage_ordered) {
+                    const pos = self.lowerBoundIndexInOrderedStorage(k);
+                    const loc = if (pos < self.length) self.lc.locationAt(pos) else null;
+                    return Iterator.init(self, loc);
+                }
+            }
             var loc = self.root;
             var candidate: ?Location = null;
             while (loc) |l| {
@@ -969,6 +976,13 @@ fn InitTreeType(comptime K: type, comptime V: type, comptime Cache: type, compti
         // upperBound returns an iterator positioned at the first element whose key is greater than k.
         // Time complexity: O(logn).
         pub fn upperBound(self: *Self, k: K) Iterator {
+            if (cacheCapabilities.hasOrderedStorage) {
+                if (self.storage_ordered) {
+                    const pos = self.upperBoundIndexInOrderedStorage(k);
+                    const loc = if (pos < self.length) self.lc.locationAt(pos) else null;
+                    return Iterator.init(self, loc);
+                }
+            }
             var loc = self.root;
             var candidate: ?Location = null;
             while (loc) |l| {
@@ -1001,7 +1015,7 @@ fn InitTreeType(comptime K: type, comptime V: type, comptime Cache: type, compti
         // get returns a value for key k.
         // Time complexity: O(logn).
         pub fn get(self: *Self, k: K) ?*V {
-            if (comptime cacheCapabilities.hasOrderedStorage) {
+            if (cacheCapabilities.hasOrderedStorage) {
                 if (self.storage_ordered) {
                     return self.getInOrderedStorage(k);
                 }
@@ -1032,12 +1046,52 @@ fn InitTreeType(comptime K: type, comptime V: type, comptime Cache: type, compti
             return null;
         }
 
+        // lowerBoundIndexInOrderedStorage returns the first dense storage index
+        // whose key is >= k, or length when every key is smaller.
+        fn lowerBoundIndexInOrderedStorage(self: *Self, k: K) usize {
+            var left: usize = 0;
+            var right = self.length;
+            while (left < right) {
+                const mid = left + (right - left) / 2;
+                const loc = self.lc.locationAt(mid);
+                switch (Comparer(k, self.keyPtr(loc).*)) {
+                    .lt, .eq => right = mid,
+                    .gt => left = mid + 1,
+                }
+            }
+            return left;
+        }
+
+        // upperBoundIndexInOrderedStorage returns the first dense storage index
+        // whose key is > k, or length when no greater key exists.
+        fn upperBoundIndexInOrderedStorage(self: *Self, k: K) usize {
+            var left: usize = 0;
+            var right = self.length;
+            while (left < right) {
+                const mid = left + (right - left) / 2;
+                const loc = self.lc.locationAt(mid);
+                switch (Comparer(k, self.keyPtr(loc).*)) {
+                    .lt => right = mid,
+                    .eq, .gt => left = mid + 1,
+                }
+            }
+            return left;
+        }
+
         // rank returns the position of k in the sorted sequence.
         // Returns null if k is not present.
         // Time complexity:
-        //  O(logn) - if children node counts are enabled.
+        //  O(logn) - if ordered storage or children node counts are enabled.
         //  O(n) - otherwise.
         pub fn rank(self: *Self, k: K) ?usize {
+            if (cacheCapabilities.hasOrderedStorage) {
+                if (self.storage_ordered) {
+                    const pos = self.lowerBoundIndexInOrderedStorage(k);
+                    if (pos == self.length) return null;
+                    const loc = self.lc.locationAt(pos);
+                    return if (Comparer(k, self.keyPtr(loc).*) == .eq) pos else null;
+                }
+            }
             if (!options.countChildren) {
                 return self.rankLinearly(k);
             }
@@ -1090,7 +1144,7 @@ fn InitTreeType(comptime K: type, comptime V: type, comptime Cache: type, compti
         // rankDistance returns the absolute distance between sorted positions of k1 and k2.
         // If k1 or k2 is not present in the tree, rankDistance returns null.
         // Time complexity:
-        //  O(logn) - if children node counts are enabled.
+        //  O(logn) - if ordered storage or children node counts are enabled.
         //  O(n) - otherwise.
         pub fn rankDistance(self: *Self, k1: K, k2: K) ?usize {
             const r1 = self.rank(k1) orelse return null;
@@ -1102,7 +1156,7 @@ fn InitTreeType(comptime K: type, comptime V: type, comptime Cache: type, compti
         // k1 and k2 themselves may not be present in the tree.
         // Example: [10 20 30 40 50 60], k1=15, k2=50 --> 4.
         // Time complexity:
-        //  O(logn) - if children node counts are enabled.
+        //  O(logn) - if ordered storage or children node counts are enabled.
         //  O(n) - otherwise.
         pub fn countInRange(self: *Self, k1: K, k2: K) usize {
             const r1 = self.lowerBoundRank(k1) orelse return 0;
@@ -1112,6 +1166,12 @@ fn InitTreeType(comptime K: type, comptime V: type, comptime Cache: type, compti
 
         // lowerBoundRank returns the rank of the first element whose key is >= k.
         fn lowerBoundRank(self: *Self, k: K) ?usize {
+            if (cacheCapabilities.hasOrderedStorage) {
+                if (self.storage_ordered) {
+                    const pos = self.lowerBoundIndexInOrderedStorage(k);
+                    return if (pos < self.length) pos else null;
+                }
+            }
             if (options.countChildren) {
                 return self.lowerBoundRankWithCountChildren(k);
             }
@@ -1120,6 +1180,12 @@ fn InitTreeType(comptime K: type, comptime V: type, comptime Cache: type, compti
 
         // floorRank returns the rank of the last element whose key is <= k.
         fn floorRank(self: *Self, k: K) ?usize {
+            if (cacheCapabilities.hasOrderedStorage) {
+                if (self.storage_ordered) {
+                    const pos = self.upperBoundIndexInOrderedStorage(k);
+                    return if (pos == 0) null else pos - 1;
+                }
+            }
             if (options.countChildren) {
                 return self.floorRankWithCountChildren(k);
             }
@@ -1589,7 +1655,7 @@ fn InitTreeType(comptime K: type, comptime V: type, comptime Cache: type, compti
         }
 
         fn nextIteratorLocation(self: *Self, loc: Location) ?Location {
-            if (comptime cacheCapabilities.hasOrderedStorage) {
+            if (cacheCapabilities.hasOrderedStorage) {
                 if (self.storage_ordered) {
                     return self.lc.nextLocation(loc, self.length);
                 }
@@ -1598,7 +1664,7 @@ fn InitTreeType(comptime K: type, comptime V: type, comptime Cache: type, compti
         }
 
         fn prevIteratorLocation(self: *Self, loc: Location) ?Location {
-            if (comptime cacheCapabilities.hasOrderedStorage) {
+            if (cacheCapabilities.hasOrderedStorage) {
                 if (self.storage_ordered) {
                     return self.lc.prevLocation(loc);
                 }
@@ -1639,7 +1705,7 @@ fn InitTreeType(comptime K: type, comptime V: type, comptime Cache: type, compti
             if (pos >= self.len()) {
                 @panic("index out of range");
             }
-            if (comptime cacheCapabilities.hasOrderedStorage) {
+            if (cacheCapabilities.hasOrderedStorage) {
                 if (self.storage_ordered) {
                     return self.locateAtOrdered(pos);
                 }
@@ -2643,6 +2709,34 @@ test "tree rankDistance without countChildren" {
     try testTreeRankDistance(.{ .countChildren = false });
 }
 
+fn expectRankRangeAndBounds(t: anytype, sorted_keys: []const i64, query_keys: []const i64) !void {
+    const TreeType = @TypeOf(t.*);
+    for (sorted_keys, 0..) |key, idx| {
+        try std.testing.expectEqual(@as(?usize, idx), t.rank(key));
+        try std.testing.expectEqual(key, t.at(idx).Key);
+        try std.testing.expectEqual(key, t.iteratorAt(idx).value().?.Key);
+    }
+
+    for (query_keys) |key| {
+        const lower_rank = sortedLowerBoundRank(sorted_keys, key);
+        const lower_key = if (lower_rank) |rank| sorted_keys[rank] else null;
+        try expectOptionalEntryKey(TreeType.Entry, lower_key, t.lowerBound(key).value());
+
+        const upper_rank = sortedUpperBoundRank(sorted_keys, key);
+        const upper_key = if (upper_rank) |rank| sorted_keys[rank] else null;
+        try expectOptionalEntryKey(TreeType.Entry, upper_key, t.upperBound(key).value());
+
+        try std.testing.expectEqual(sortedRank(sorted_keys, key), t.rank(key));
+    }
+
+    for (query_keys) |k1| {
+        for (query_keys) |k2| {
+            try std.testing.expectEqual(sortedCountInRange(sorted_keys, k1, k2), t.countInRange(k1, k2));
+            try std.testing.expectEqual(sortedRankDistance(sorted_keys, k1, k2), t.rankDistance(k1, k2));
+        }
+    }
+}
+
 fn testRankRangeAndBoundsAgainstSortedSlice(comptime options: Options) !void {
     const a = std.testing.allocator;
     const TreeType = TreeWithOptions(i64, i64, i64Cmp, options);
@@ -2651,6 +2745,10 @@ fn testRankRangeAndBoundsAgainstSortedSlice(comptime options: Options) !void {
 
     const sorted_keys = [_]i64{ -50, -10, 0, 3, 4, 10, 17, 31, 32, 99 };
     var insert_keys = sorted_keys;
+    const query_keys = [_]i64{
+        -60, -50, -49, -11, -10, -9, -1, 0,  1,  3,  4,   5,
+        10,  16,  17,  18,  30,  31, 32, 33, 98, 99, 100,
+    };
 
     var prng = std.Random.DefaultPrng.init(0x5eed);
     prng.random().shuffle(i64, insert_keys[0..]);
@@ -2660,34 +2758,11 @@ fn testRankRangeAndBoundsAgainstSortedSlice(comptime options: Options) !void {
         try std.testing.expect(result.inserted);
     }
 
-    for (sorted_keys, 0..) |key, idx| {
-        try std.testing.expectEqual(@as(?usize, idx), t.rank(key));
-        try std.testing.expectEqual(key, t.at(idx).Key);
-        try std.testing.expectEqual(key, t.iteratorAt(idx).value().?.Key);
-    }
-
-    const query_keys = [_]i64{
-        -60, -50, -49, -11, -10, -9, -1, 0,  1,  3,  4,   5,
-        10,  16,  17,  18,  30,  31, 32, 33, 98, 99, 100,
-    };
-
-    for (query_keys) |key| {
-        const lower_rank = sortedLowerBoundRank(&sorted_keys, key);
-        const lower_key = if (lower_rank) |rank| sorted_keys[rank] else null;
-        try expectOptionalEntryKey(TreeType.Entry, lower_key, t.lowerBound(key).value());
-
-        const upper_rank = sortedUpperBoundRank(&sorted_keys, key);
-        const upper_key = if (upper_rank) |rank| sorted_keys[rank] else null;
-        try expectOptionalEntryKey(TreeType.Entry, upper_key, t.upperBound(key).value());
-
-        try std.testing.expectEqual(sortedRank(&sorted_keys, key), t.rank(key));
-    }
-
-    for (query_keys) |k1| {
-        for (query_keys) |k2| {
-            try std.testing.expectEqual(sortedCountInRange(&sorted_keys, k1, k2), t.countInRange(k1, k2));
-            try std.testing.expectEqual(sortedRankDistance(&sorted_keys, k1, k2), t.rankDistance(k1, k2));
-        }
+    try expectRankRangeAndBounds(&t, &sorted_keys, &query_keys);
+    if (options.nodeCacheType != .PointerBased) {
+        t.orderStorageByKey();
+        try std.testing.expect(t.storage_ordered);
+        try expectRankRangeAndBounds(&t, &sorted_keys, &query_keys);
     }
 }
 
