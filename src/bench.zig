@@ -401,6 +401,74 @@ fn benchGetOrderedStorage(comptime name: []const u8, comptime options: zigavl.Op
     report(bench_name, keys.len, nowNs() - start, checksum);
 }
 
+fn benchOrderedBounds(comptime name: []const u8, comptime options: zigavl.Options, a: std.mem.Allocator, keys: []const i64) !void {
+    const bench_name = name ++ "/bounds/ordered-storage";
+    const Tree = zigavl.TreeWithOptions(i64, i64, i64Cmp, options);
+    var tree = try Tree.init(a);
+    defer tree.deinit();
+
+    for (0..bench_len) |idx| {
+        const key: i64 = @intCast(idx);
+        _ = try tree.insert(key, key);
+    }
+    tree.orderStorageByKey();
+
+    var checksum: i64 = 0;
+    const start = nowNs();
+    for (keys) |key| {
+        checksum += tree.lowerBound(key).value().?.Key;
+        if (tree.upperBound(key).value()) |entry| {
+            checksum += entry.Key;
+        }
+    }
+    report(bench_name, keys.len * 2, nowNs() - start, checksum);
+}
+
+fn benchOrderedRank(comptime name: []const u8, comptime options: zigavl.Options, a: std.mem.Allocator, keys: []const i64) !void {
+    const mode = if (options.countChildren) "counted" else "uncounted";
+    const bench_name = name ++ "/rank/ordered-storage-" ++ mode;
+    const Tree = zigavl.TreeWithOptions(i64, i64, i64Cmp, options);
+    var tree = try Tree.init(a);
+    defer tree.deinit();
+
+    for (0..bench_len) |idx| {
+        const key: i64 = @intCast(idx);
+        _ = try tree.insert(key, key);
+    }
+    tree.orderStorageByKey();
+
+    var checksum: i64 = 0;
+    const start = nowNs();
+    for (keys) |key| {
+        checksum += @intCast(tree.rank(key).?);
+    }
+    report(bench_name, keys.len, nowNs() - start, checksum);
+}
+
+fn benchOrderedCountInRange(comptime name: []const u8, comptime options: zigavl.Options, a: std.mem.Allocator, keys: []const i64) !void {
+    const mode = if (options.countChildren) "counted" else "uncounted";
+    const bench_name = name ++ "/count-in-range/ordered-storage-" ++ mode;
+    const Tree = zigavl.TreeWithOptions(i64, i64, i64Cmp, options);
+    var tree = try Tree.init(a);
+    defer tree.deinit();
+
+    for (0..bench_len) |idx| {
+        const key: i64 = @intCast(idx);
+        _ = try tree.insert(key, key);
+    }
+    tree.orderStorageByKey();
+
+    var checksum: i64 = 0;
+    const start = nowNs();
+    for (keys, 0..) |key, idx| {
+        const other = keys[keys.len - idx - 1];
+        const lower = @min(key, other);
+        const upper = @max(key, other);
+        checksum += @intCast(tree.countInRange(lower, upper));
+    }
+    report(bench_name, keys.len, nowNs() - start, checksum);
+}
+
 fn benchOrderedAppendMaximumAndGet(comptime name: []const u8, comptime options: zigavl.Options, a: std.mem.Allocator, keys: []const i64) !void {
     const bench_name = name ++ "/ordered-storage/append-maximum-and-get";
     const Tree = zigavl.TreeWithOptions(i64, i64, i64Cmp, options);
@@ -473,6 +541,23 @@ fn benchTree(comptime name: []const u8, comptime options: zigavl.Options, a: std
         if (shouldRun(filter, name ++ "/at/ordered")) try benchAtOrdered(name, options, a);
         if (shouldRun(filter, name ++ "/at/ordered-including-order")) try benchAtOrderedIncludingOrder(name, options, a);
         if (shouldRun(filter, name ++ "/get/ordered-storage")) try benchGetOrderedStorage(name, options, a, random_keys);
+        if (shouldRun(filter, name ++ "/bounds/ordered-storage")) try benchOrderedBounds(name, options, a, random_keys);
+        if (shouldRun(filter, name ++ "/rank/ordered-storage-uncounted")) try benchOrderedRank(name, .{
+            .countChildren = false,
+            .nodeCacheType = options.nodeCacheType,
+        }, a, random_keys);
+        if (shouldRun(filter, name ++ "/rank/ordered-storage-counted")) try benchOrderedRank(name, .{
+            .countChildren = true,
+            .nodeCacheType = options.nodeCacheType,
+        }, a, random_keys);
+        if (shouldRun(filter, name ++ "/count-in-range/ordered-storage-uncounted")) try benchOrderedCountInRange(name, .{
+            .countChildren = false,
+            .nodeCacheType = options.nodeCacheType,
+        }, a, random_keys);
+        if (shouldRun(filter, name ++ "/count-in-range/ordered-storage-counted")) try benchOrderedCountInRange(name, .{
+            .countChildren = true,
+            .nodeCacheType = options.nodeCacheType,
+        }, a, random_keys);
         if (shouldRun(filter, name ++ "/ordered-storage/append-maximum-and-get")) try benchOrderedAppendMaximumAndGet(name, options, a, random_keys);
         if (shouldRun(filter, name ++ "/ordered-storage/remove-maximum-and-get")) try benchOrderedRemoveMaximumAndGet(name, options, a, random_keys);
     }
