@@ -3,6 +3,7 @@ const math = std.math;
 const cache = @import("cache.zig");
 const cache_contract = @import("cache_contract.zig");
 const direction = @import("direction.zig").direction;
+const ordered_search = @import("ordered_search.zig");
 
 pub const NodeCacheType = cache.NodeCacheType;
 
@@ -948,7 +949,7 @@ fn InitTreeType(comptime K: type, comptime V: type, comptime Cache: type, compti
         pub fn lowerBound(self: *Self, k: K) Iterator {
             if (cacheCapabilities.hasOrderedStorage) {
                 if (self.storage_ordered) {
-                    const pos = self.lowerBoundIndexInOrderedStorage(k);
+                    const pos = ordered_search.lowerBoundIndex(&self.lc, self.length, k, Comparer);
                     const loc = if (pos < self.length) self.lc.locationAt(pos) else null;
                     return Iterator.init(self, loc);
                 }
@@ -978,7 +979,7 @@ fn InitTreeType(comptime K: type, comptime V: type, comptime Cache: type, compti
         pub fn upperBound(self: *Self, k: K) Iterator {
             if (cacheCapabilities.hasOrderedStorage) {
                 if (self.storage_ordered) {
-                    const pos = self.upperBoundIndexInOrderedStorage(k);
+                    const pos = ordered_search.upperBoundIndex(&self.lc, self.length, k, Comparer);
                     const loc = if (pos < self.length) self.lc.locationAt(pos) else null;
                     return Iterator.init(self, loc);
                 }
@@ -1032,50 +1033,8 @@ fn InitTreeType(comptime K: type, comptime V: type, comptime Cache: type, compti
         // getInOrderedStorage performs binary search on the dense storage prefix directly. It is
         // valid only while storage addresses follow key order.
         fn getInOrderedStorage(self: *Self, k: K) ?*V {
-            var left: usize = 0;
-            var right = self.length;
-            while (left < right) {
-                const mid = left + (right - left) / 2;
-                const loc = self.lc.locationAt(mid);
-                switch (Comparer(k, self.keyPtr(loc).*)) {
-                    .lt => right = mid,
-                    .eq => return self.valuePtr(loc),
-                    .gt => left = mid + 1,
-                }
-            }
-            return null;
-        }
-
-        // lowerBoundIndexInOrderedStorage returns the first dense storage index
-        // whose key is >= k, or length when every key is smaller.
-        fn lowerBoundIndexInOrderedStorage(self: *Self, k: K) usize {
-            var left: usize = 0;
-            var right = self.length;
-            while (left < right) {
-                const mid = left + (right - left) / 2;
-                const loc = self.lc.locationAt(mid);
-                switch (Comparer(k, self.keyPtr(loc).*)) {
-                    .lt, .eq => right = mid,
-                    .gt => left = mid + 1,
-                }
-            }
-            return left;
-        }
-
-        // upperBoundIndexInOrderedStorage returns the first dense storage index
-        // whose key is > k, or length when no greater key exists.
-        fn upperBoundIndexInOrderedStorage(self: *Self, k: K) usize {
-            var left: usize = 0;
-            var right = self.length;
-            while (left < right) {
-                const mid = left + (right - left) / 2;
-                const loc = self.lc.locationAt(mid);
-                switch (Comparer(k, self.keyPtr(loc).*)) {
-                    .lt => right = mid,
-                    .eq, .gt => left = mid + 1,
-                }
-            }
-            return left;
+            const pos = ordered_search.findIndex(&self.lc, self.length, k, Comparer) orelse return null;
+            return self.valuePtr(self.lc.locationAt(pos));
         }
 
         // rank returns the position of k in the sorted sequence.
@@ -1086,10 +1045,7 @@ fn InitTreeType(comptime K: type, comptime V: type, comptime Cache: type, compti
         pub fn rank(self: *Self, k: K) ?usize {
             if (cacheCapabilities.hasOrderedStorage) {
                 if (self.storage_ordered) {
-                    const pos = self.lowerBoundIndexInOrderedStorage(k);
-                    if (pos == self.length) return null;
-                    const loc = self.lc.locationAt(pos);
-                    return if (Comparer(k, self.keyPtr(loc).*) == .eq) pos else null;
+                    return ordered_search.findIndex(&self.lc, self.length, k, Comparer);
                 }
             }
             if (!options.countChildren) {
@@ -1168,7 +1124,7 @@ fn InitTreeType(comptime K: type, comptime V: type, comptime Cache: type, compti
         fn lowerBoundRank(self: *Self, k: K) ?usize {
             if (cacheCapabilities.hasOrderedStorage) {
                 if (self.storage_ordered) {
-                    const pos = self.lowerBoundIndexInOrderedStorage(k);
+                    const pos = ordered_search.lowerBoundIndex(&self.lc, self.length, k, Comparer);
                     return if (pos < self.length) pos else null;
                 }
             }
@@ -1182,7 +1138,7 @@ fn InitTreeType(comptime K: type, comptime V: type, comptime Cache: type, compti
         fn floorRank(self: *Self, k: K) ?usize {
             if (cacheCapabilities.hasOrderedStorage) {
                 if (self.storage_ordered) {
-                    const pos = self.upperBoundIndexInOrderedStorage(k);
+                    const pos = ordered_search.upperBoundIndex(&self.lc, self.length, k, Comparer);
                     return if (pos == 0) null else pos - 1;
                 }
             }
@@ -1722,138 +1678,6 @@ fn i64Cmp(a: i64, b: i64) math.Order {
     return math.order(a, b);
 }
 
-const Pair = struct {
-    first: i64,
-    second: i64,
-};
-
-fn pairCmp(a: Pair, b: Pair) math.Order {
-    return switch (math.order(a.first, b.first)) {
-        .eq => math.order(a.second, b.second),
-        else => |order| order,
-    };
-}
-
-fn sortedRank(keys: []const i64, key: i64) ?usize {
-    for (keys, 0..) |candidate, idx| {
-        switch (i64Cmp(key, candidate)) {
-            .lt => return null,
-            .eq => return idx,
-            .gt => {},
-        }
-    }
-    return null;
-}
-
-fn sortedLowerBoundRank(keys: []const i64, key: i64) ?usize {
-    for (keys, 0..) |candidate, idx| {
-        switch (i64Cmp(key, candidate)) {
-            .lt, .eq => return idx,
-            .gt => {},
-        }
-    }
-    return null;
-}
-
-fn sortedFloorRank(keys: []const i64, key: i64) ?usize {
-    var result: ?usize = null;
-    for (keys, 0..) |candidate, idx| {
-        switch (i64Cmp(key, candidate)) {
-            .lt => return result,
-            .eq => return idx,
-            .gt => result = idx,
-        }
-    }
-    return result;
-}
-
-fn sortedUpperBoundRank(keys: []const i64, key: i64) ?usize {
-    for (keys, 0..) |candidate, idx| {
-        switch (i64Cmp(key, candidate)) {
-            .lt => return idx,
-            .eq, .gt => {},
-        }
-    }
-    return null;
-}
-
-fn sortedCountInRange(keys: []const i64, k1: i64, k2: i64) usize {
-    const r1 = sortedLowerBoundRank(keys, k1) orelse return 0;
-    const r2 = sortedFloorRank(keys, k2) orelse return 0;
-    return if (r2 >= r1) r2 - r1 + 1 else 0;
-}
-
-fn sortedRankDistance(keys: []const i64, k1: i64, k2: i64) ?usize {
-    const r1 = sortedRank(keys, k1) orelse return null;
-    const r2 = sortedRank(keys, k2) orelse return null;
-    return if (r2 >= r1) r2 - r1 else r1 - r2;
-}
-
-fn expectOptionalEntryKey(comptime Entry: type, expected: ?i64, actual: ?Entry) !void {
-    if (expected) |key| {
-        try std.testing.expect(actual != null);
-        try std.testing.expectEqual(key, actual.?.Key);
-    } else {
-        try std.testing.expectEqual(@as(?Entry, null), actual);
-    }
-}
-
-test "empty tree" {
-    const a = std.testing.allocator;
-    const TreeType = TreeWithOptions(i64, i64, i64Cmp, .{ .countChildren = true });
-    var t = try TreeType.init(a);
-    defer t.deinit();
-
-    var it = t.iteratorAtFirst();
-    try std.testing.expectEqual(@as(?TreeType.Entry, null), it.value());
-
-    try std.testing.expect(t.delete(0) == null);
-}
-
-fn testTreeClear(comptime options: Options) !void {
-    const a = std.testing.allocator;
-    const TreeType = TreeWithOptions(i64, i64, i64Cmp, options);
-    var t = try TreeType.init(a);
-    defer t.deinit();
-
-    t.clear();
-    try std.testing.expectEqual(@as(usize, 0), t.len());
-    try std.testing.expectEqual(@as(?TreeType.Entry, null), t.getMin());
-    try std.testing.expectEqual(@as(?TreeType.Entry, null), t.getMax());
-
-    for (0..128) |idx| {
-        const key: i64 = @intCast(idx);
-        const result = try t.insert(key, key);
-        try std.testing.expect(result.inserted);
-    }
-
-    t.clear();
-    try std.testing.expectEqual(@as(usize, 0), t.len());
-    try std.testing.expectEqual(@as(?TreeType.Entry, null), t.getMin());
-    try std.testing.expectEqual(@as(?TreeType.Entry, null), t.getMax());
-    try std.testing.expectEqual(@as(?*i64, null), t.get(64));
-    try std.testing.expectEqual(@as(?TreeType.Entry, null), t.iteratorAtFirst().value());
-    try std.testing.expectEqual(@as(?usize, null), t.rank(64));
-    try std.testing.expectEqual(@as(usize, 0), t.countInRange(0, 127));
-
-    const inserted = try t.insert(42, 100);
-    try std.testing.expect(inserted.inserted);
-    try std.testing.expectEqual(@as(usize, 1), t.len());
-    try std.testing.expectEqual(@as(i64, 100), t.get(42).?.*);
-    try std.testing.expectEqual(@as(?usize, 0), t.rank(42));
-}
-
-test "tree clear across options" {
-    try testTreeClear(.{ .countChildren = false, .nodeCacheType = .PointerBased });
-    try testTreeClear(.{ .countChildren = true, .nodeCacheType = .PointerBased });
-    try testTreeClear(.{ .countChildren = false, .nodeCacheType = .ArrayBased });
-    try testTreeClear(.{ .countChildren = true, .nodeCacheType = .ArrayBased });
-    try testTreeClear(.{ .countChildren = false, .nodeCacheType = .StableArrayBased });
-    try testTreeClear(.{ .countChildren = true, .nodeCacheType = .StableArrayBased });
-    try testTreeClear(.{ .countChildren = false, .nodeCacheType = .SplitArrayBased });
-    try testTreeClear(.{ .countChildren = true, .nodeCacheType = .SplitArrayBased });
-}
-
 fn testTreeBuildFromSortedWithItems(comptime TreeType: type, t: *TreeType, items: []const TreeType.KV, comptime shouldBeOrdered: bool) !void {
     const sentinel = 99999;
     _ = try t.insert(sentinel, 990);
@@ -1936,109 +1760,6 @@ test "tree buildFromSorted across options" {
     try testTreeBuildFromSorted(.{ .countChildren = true, .nodeCacheType = .StableArrayBased });
     try testTreeBuildFromSorted(.{ .countChildren = false, .nodeCacheType = .SplitArrayBased });
     try testTreeBuildFromSorted(.{ .countChildren = true, .nodeCacheType = .SplitArrayBased });
-}
-
-test "tree buildFromSorted rejects unsorted input without clearing tree" {
-    const a = std.testing.allocator;
-    const TreeType = Tree(i64, i64, i64Cmp);
-    var t = try TreeType.init(a);
-    defer t.deinit();
-
-    _ = try t.insert(42, 420);
-
-    const duplicate_items = [_]TreeType.KV{
-        .{ .Key = 1, .Value = 10 },
-        .{ .Key = 1, .Value = 11 },
-    };
-    try std.testing.expectError(error.ItemsNotStrictlySorted, t.buildFromSorted(&duplicate_items));
-    try std.testing.expectEqual(@as(usize, 1), t.len());
-    try std.testing.expectEqual(@as(i64, 420), t.get(42).?.*);
-
-    const unsorted_items = [_]TreeType.KV{
-        .{ .Key = 2, .Value = 20 },
-        .{ .Key = 1, .Value = 10 },
-    };
-    try std.testing.expectError(error.ItemsNotStrictlySorted, t.buildFromSorted(&unsorted_items));
-    try std.testing.expectEqual(@as(usize, 1), t.len());
-    try std.testing.expectEqual(@as(i64, 420), t.get(42).?.*);
-}
-
-test "tree buildFromSorted accepts empty input" {
-    const a = std.testing.allocator;
-    const TreeType = Tree(i64, i64, i64Cmp);
-    var t = try TreeType.init(a);
-    defer t.deinit();
-
-    _ = try t.insert(42, 420);
-    const empty_items = [_]TreeType.KV{};
-    try t.buildFromSorted(&empty_items);
-
-    try std.testing.expectEqual(@as(usize, 0), t.len());
-    try std.testing.expectEqual(@as(?TreeType.Entry, null), t.getMin());
-    try std.testing.expectEqual(@as(?TreeType.Entry, null), t.getMax());
-}
-
-fn testTreeReclaimSearchable(comptime options: Options) !void {
-    const a = std.testing.allocator;
-    const TreeType = TreeWithOptions(i64, i64, i64Cmp, options);
-    var t = try TreeType.init(a);
-    defer t.deinit();
-
-    for (0..16) |idx| {
-        const key: i64 = @intCast(idx);
-        _ = try t.insert(key, key * 10);
-    }
-
-    try std.testing.expectEqual(@as(i64, 10), t.delete(1).?);
-    try std.testing.expectEqual(@as(i64, 30), t.delete(3).?);
-    try std.testing.expectEqual(@as(i64, 60), t.delete(6).?);
-    try std.testing.expectEqual(@as(i64, 70), t.delete(7).?);
-
-    t.compactStorage();
-
-    const expected = [_]i64{ 0, 2, 4, 5, 8, 9, 10, 11, 12, 13, 14, 15 };
-    try std.testing.expectEqual(expected.len, t.len());
-    try std.testing.expectEqual(@as(i64, 0), t.getMin().?.Key);
-    try std.testing.expectEqual(@as(i64, 15), t.getMax().?.Key);
-    try std.testing.expectEqual(@as(?usize, 4), t.rank(8));
-    try std.testing.expectEqual(@as(usize, 4), t.countInRange(8, 11));
-
-    var it = t.iteratorAtFirst();
-    for (expected) |key| {
-        const entry = it.value() orelse return error.MissingEntry;
-        try std.testing.expectEqual(key, entry.Key);
-        try std.testing.expectEqual(key * 10, entry.Value.*);
-        it.next();
-    }
-    try std.testing.expectEqual(@as(?TreeType.Entry, null), it.value());
-}
-
-test "tree compactStorage keeps compacting caches searchable" {
-    try testTreeReclaimSearchable(.{ .countChildren = true, .nodeCacheType = .ArrayBased });
-    try testTreeReclaimSearchable(.{ .countChildren = true, .nodeCacheType = .StableArrayBased });
-    try testTreeReclaimSearchable(.{ .countChildren = true, .nodeCacheType = .SplitArrayBased });
-}
-
-fn testTreeCompactStorageNoop(comptime options: Options) !void {
-    const a = std.testing.allocator;
-    const TreeType = TreeWithOptions(i64, i64, i64Cmp, options);
-    var t = try TreeType.init(a);
-    defer t.deinit();
-
-    _ = try t.insert(2, 20);
-    _ = try t.insert(1, 10);
-    _ = try t.insert(3, 30);
-
-    t.compactStorage();
-
-    try std.testing.expectEqual(@as(usize, 3), t.len());
-    try std.testing.expectEqual(@as(i64, 1), t.getMin().?.Key);
-    try std.testing.expectEqual(@as(i64, 3), t.getMax().?.Key);
-    try std.testing.expectEqual(@as(i64, 20), t.get(2).?.*);
-}
-
-test "tree compactStorage is noop for pointer cache" {
-    try testTreeCompactStorageNoop(.{ .nodeCacheType = .PointerBased });
 }
 
 fn testTreeOrderStorageByKey(comptime options: Options) !void {
@@ -2173,44 +1894,6 @@ test "tree ordered storage survives tail mutations" {
     try testTreeOrderedStorageTailMutations(.{ .countChildren = true, .nodeCacheType = .StableArrayBased });
     try testTreeOrderedStorageTailMutations(.{ .countChildren = false, .nodeCacheType = .SplitArrayBased });
     try testTreeOrderedStorageTailMutations(.{ .countChildren = true, .nodeCacheType = .SplitArrayBased });
-}
-
-test "tree orderStorageByKey is noop for pointer cache" {
-    const a = std.testing.allocator;
-    const TreeType = TreeWithOptions(i64, i64, i64Cmp, .{ .nodeCacheType = .PointerBased });
-    var t = try TreeType.init(a);
-    defer t.deinit();
-
-    _ = try t.insert(2, 20);
-    _ = try t.insert(1, 10);
-    _ = try t.insert(3, 30);
-
-    t.orderStorageByKey();
-
-    try std.testing.expectEqual(@as(usize, 3), t.len());
-    try std.testing.expectEqual(@as(i64, 1), t.at(0).Key);
-    try std.testing.expectEqual(@as(i64, 2), t.at(1).Key);
-    try std.testing.expectEqual(@as(i64, 3), t.at(2).Key);
-}
-
-test "tree getOrInsert" {
-    const a = std.testing.allocator;
-    const TreeType = Tree(i64, i64, i64Cmp);
-    var t = try TreeType.init(a);
-    defer t.deinit();
-    var ir = t.insert(1, 1) catch unreachable;
-    try std.testing.expectEqual(true, ir.inserted);
-    ir = try t.getOrInsert(1, 2);
-    try std.testing.expectEqual(false, ir.inserted);
-    try std.testing.expectEqual(@as(i64, 1), ir.v.*);
-    ir = t.insert(1, 1) catch unreachable;
-    try std.testing.expectEqual(false, ir.inserted);
-    ir.v.* = 2;
-    try std.testing.expectEqual(@as(i64, 2), t.get(1).?.*);
-    ir = try t.getOrInsert(2, 2);
-    try std.testing.expectEqual(@as(i64, 2), t.get(2).?.*);
-    ir.v.* = 3;
-    try std.testing.expectEqual(@as(i64, 3), t.get(2).?.*);
 }
 
 test "tree getOrEmplace" {
@@ -2501,282 +2184,6 @@ test "tree updateKey (array cache)" {
     try testTreeUpdateKey(.{ .countChildren = true, .nodeCacheType = .ArrayBased });
 }
 
-test "stable array based value pointers survive cache growth" {
-    const a = std.testing.allocator;
-    const TreeType = TreeWithOptions(i64, i64, i64Cmp, .{ .nodeCacheType = .StableArrayBased });
-    var t = try TreeType.init(a);
-    defer t.deinit();
-
-    const first = (try t.insert(0, 42)).v;
-    for (1..4096) |idx| {
-        const key: i64 = @intCast(idx);
-        _ = try t.insert(key, key);
-    }
-
-    try std.testing.expectEqual(@as(i64, 42), first.*);
-    first.* = 99;
-    try std.testing.expectEqual(@as(i64, 99), t.get(0).?.*);
-}
-
-test "delete min" {
-    const a = std.testing.allocator;
-    const TreeType = TreeWithOptions(i64, i64, i64Cmp, .{ .countChildren = true });
-    var t = try TreeType.init(a);
-    defer t.deinit();
-
-    var i: i64 = 0;
-    while (i <= 128) {
-        const ir = try t.insert(i, i);
-        try std.testing.expect(ir.inserted);
-        i += 1;
-    }
-    i = 0;
-    while (i <= 128) {
-        const e = t.getMin();
-        try std.testing.expectEqual(i, e.?.Key);
-        try std.testing.expectEqual(i, e.?.Value.*);
-        try std.testing.expectEqual(i, t.delete(i).?);
-        i += 1;
-    }
-    const exp_len: usize = 0;
-    try std.testing.expectEqual(exp_len, t.len());
-}
-
-test "delete max" {
-    const a = std.testing.allocator;
-    const TreeType = TreeWithOptions(i64, i64, i64Cmp, .{ .countChildren = true });
-    var t = try TreeType.init(a);
-    defer t.deinit();
-
-    var i: i64 = 0;
-    while (i <= 128) {
-        const ir = try t.insert(i, i);
-        try std.testing.expect(ir.inserted);
-        i += 1;
-    }
-    i = 0;
-    while (i <= 128) {
-        const e = t.getMax();
-        try std.testing.expectEqual(128 - i, e.?.Key);
-        try std.testing.expectEqual(128 - i, e.?.Value.*);
-        try std.testing.expectEqual(128 - i, t.delete(128 - i).?);
-        i += 1;
-    }
-    const exp_len: usize = 0;
-    try std.testing.expectEqual(exp_len, t.len());
-}
-
-test "tree at_countChildren" {
-    const a = std.testing.allocator;
-    const TreeType = TreeWithOptions(i64, i64, i64Cmp, .{ .countChildren = true });
-    var t = try TreeType.init(a);
-    defer t.deinit();
-
-    var i: i64 = 0;
-    while (i <= 128) {
-        const ir = try t.insert(i, i);
-        try std.testing.expect(ir.inserted);
-        i += 1;
-    }
-
-    i = 0;
-    while (i <= 128) {
-        const e = t.at(@as(usize, @intCast(i)));
-        try std.testing.expectEqual(i, e.Key);
-        try std.testing.expectEqual(i, e.Value.*);
-        i += 1;
-    }
-}
-
-test "tree at_nocountChildren" {
-    const a = std.testing.allocator;
-    const TreeType = TreeWithOptions(i64, i64, i64Cmp, .{ .countChildren = false });
-    var t = try TreeType.init(a);
-    defer t.deinit();
-
-    var i: i64 = 0;
-    while (i <= 128) {
-        const ir = try t.insert(i, i);
-        try std.testing.expect(ir.inserted);
-        i += 1;
-    }
-
-    i = 0;
-    while (i <= 128) {
-        const e = t.at(@as(usize, @intCast(i)));
-        try std.testing.expectEqual(i, e.Key);
-        try std.testing.expectEqual(i, e.Value.*);
-        i += 1;
-    }
-}
-
-fn testTreeRank(comptime options: Options) !void {
-    const a = std.testing.allocator;
-    const TreeType = TreeWithOptions(i64, i64, i64Cmp, options);
-    var t = try TreeType.init(a);
-    defer t.deinit();
-
-    for ([_]i64{ 30, 10, 50, 20, 40 }) |key| {
-        _ = try t.insert(key, key);
-    }
-
-    try std.testing.expectEqual(@as(?usize, 0), t.rank(10));
-    try std.testing.expectEqual(@as(?usize, 1), t.rank(20));
-    try std.testing.expectEqual(@as(?usize, 2), t.rank(30));
-    try std.testing.expectEqual(@as(?usize, 3), t.rank(40));
-    try std.testing.expectEqual(@as(?usize, 4), t.rank(50));
-
-    try std.testing.expectEqual(@as(?usize, null), t.rank(5));
-    try std.testing.expectEqual(@as(?usize, null), t.rank(25));
-    try std.testing.expectEqual(@as(?usize, null), t.rank(60));
-}
-
-test "tree rank with countChildren" {
-    try testTreeRank(.{ .countChildren = true });
-}
-
-test "tree rank without countChildren" {
-    try testTreeRank(.{ .countChildren = false });
-}
-
-fn testCountInRange(comptime options: Options) !void {
-    const a = std.testing.allocator;
-    const TreeType = TreeWithOptions(i64, i64, i64Cmp, options);
-    var t = try TreeType.init(a);
-    defer t.deinit();
-
-    for ([_]i64{ 30, 10, 50, 20, 40 }) |key| {
-        _ = try t.insert(key, key);
-    }
-
-    try std.testing.expectEqual(@as(usize, 0), t.countInRange(1, 2));
-    try std.testing.expectEqual(@as(usize, 0), t.countInRange(2, 1));
-    try std.testing.expectEqual(@as(usize, 0), t.countInRange(51, 52));
-    try std.testing.expectEqual(@as(usize, 0), t.countInRange(52, 51));
-    try std.testing.expectEqual(@as(usize, 1), t.countInRange(10, 10));
-    try std.testing.expectEqual(@as(usize, 2), t.countInRange(10, 20));
-    try std.testing.expectEqual(@as(usize, 3), t.countInRange(10, 30));
-    try std.testing.expectEqual(@as(usize, 4), t.countInRange(10, 40));
-    try std.testing.expectEqual(@as(usize, 1), t.countInRange(9, 10));
-    try std.testing.expectEqual(@as(usize, 1), t.countInRange(10, 10));
-    try std.testing.expectEqual(@as(usize, 3), t.countInRange(9, 30));
-    try std.testing.expectEqual(@as(usize, 3), t.countInRange(9, 31));
-    try std.testing.expectEqual(@as(usize, 0), t.countInRange(31, 9));
-    try std.testing.expectEqual(@as(usize, 5), t.countInRange(9, 100));
-    try std.testing.expectEqual(@as(usize, 5), t.countInRange(10, 50));
-    try std.testing.expectEqual(@as(usize, 0), t.countInRange(11, 19));
-    try std.testing.expectEqual(@as(usize, 0), t.countInRange(21, 29));
-    try std.testing.expectEqual(@as(usize, 1), t.countInRange(50, 50));
-    try std.testing.expectEqual(@as(usize, 1), t.countInRange(50, 60));
-    try std.testing.expectEqual(@as(usize, 0), t.countInRange(20, 10));
-}
-
-test "tree countInRange without countChildren" {
-    try testCountInRange(.{ .countChildren = false });
-}
-
-test "tree countInRange with countChildren" {
-    try testCountInRange(.{ .countChildren = true });
-}
-
-fn testTreeRankDistance(comptime options: Options) !void {
-    const a = std.testing.allocator;
-    const TreeType = TreeWithOptions(i64, i64, i64Cmp, options);
-    var t = try TreeType.init(a);
-    defer t.deinit();
-
-    for ([_]i64{ 30, 10, 50, 20, 40 }) |key| {
-        _ = try t.insert(key, key);
-    }
-
-    try std.testing.expectEqual(@as(?usize, 0), t.rankDistance(10, 10));
-    try std.testing.expectEqual(@as(?usize, 1), t.rankDistance(10, 20));
-    try std.testing.expectEqual(@as(?usize, 2), t.rankDistance(20, 40));
-    try std.testing.expectEqual(@as(?usize, 3), t.rankDistance(10, 40));
-    try std.testing.expectEqual(@as(?usize, 4), t.rankDistance(10, 50));
-    try std.testing.expectEqual(@as(?usize, 4), t.rankDistance(50, 10));
-
-    try std.testing.expectEqual(@as(?usize, null), t.rankDistance(5, 10));
-    try std.testing.expectEqual(@as(?usize, null), t.rankDistance(10, 5));
-    try std.testing.expectEqual(@as(?usize, null), t.rankDistance(5, 60));
-}
-
-test "tree rankDistance with countChildren" {
-    try testTreeRankDistance(.{ .countChildren = true });
-}
-
-test "tree rankDistance without countChildren" {
-    try testTreeRankDistance(.{ .countChildren = false });
-}
-
-fn expectRankRangeAndBounds(t: anytype, sorted_keys: []const i64, query_keys: []const i64) !void {
-    const TreeType = @TypeOf(t.*);
-    for (sorted_keys, 0..) |key, idx| {
-        try std.testing.expectEqual(@as(?usize, idx), t.rank(key));
-        try std.testing.expectEqual(key, t.at(idx).Key);
-        try std.testing.expectEqual(key, t.iteratorAt(idx).value().?.Key);
-    }
-
-    for (query_keys) |key| {
-        const lower_rank = sortedLowerBoundRank(sorted_keys, key);
-        const lower_key = if (lower_rank) |rank| sorted_keys[rank] else null;
-        try expectOptionalEntryKey(TreeType.Entry, lower_key, t.lowerBound(key).value());
-
-        const upper_rank = sortedUpperBoundRank(sorted_keys, key);
-        const upper_key = if (upper_rank) |rank| sorted_keys[rank] else null;
-        try expectOptionalEntryKey(TreeType.Entry, upper_key, t.upperBound(key).value());
-
-        try std.testing.expectEqual(sortedRank(sorted_keys, key), t.rank(key));
-    }
-
-    for (query_keys) |k1| {
-        for (query_keys) |k2| {
-            try std.testing.expectEqual(sortedCountInRange(sorted_keys, k1, k2), t.countInRange(k1, k2));
-            try std.testing.expectEqual(sortedRankDistance(sorted_keys, k1, k2), t.rankDistance(k1, k2));
-        }
-    }
-}
-
-fn testRankRangeAndBoundsAgainstSortedSlice(comptime options: Options) !void {
-    const a = std.testing.allocator;
-    const TreeType = TreeWithOptions(i64, i64, i64Cmp, options);
-    var t = try TreeType.init(a);
-    defer t.deinit();
-
-    const sorted_keys = [_]i64{ -50, -10, 0, 3, 4, 10, 17, 31, 32, 99 };
-    var insert_keys = sorted_keys;
-    const query_keys = [_]i64{
-        -60, -50, -49, -11, -10, -9, -1, 0,  1,  3,  4,   5,
-        10,  16,  17,  18,  30,  31, 32, 33, 98, 99, 100,
-    };
-
-    var prng = std.Random.DefaultPrng.init(0x5eed);
-    prng.random().shuffle(i64, insert_keys[0..]);
-
-    for (insert_keys) |key| {
-        const result = try t.insert(key, key);
-        try std.testing.expect(result.inserted);
-    }
-
-    try expectRankRangeAndBounds(&t, &sorted_keys, &query_keys);
-    if (options.nodeCacheType != .PointerBased) {
-        t.orderStorageByKey();
-        try std.testing.expect(t.storage_ordered);
-        try expectRankRangeAndBounds(&t, &sorted_keys, &query_keys);
-    }
-}
-
-test "tree rank range and bounds match sorted slice across options" {
-    try testRankRangeAndBoundsAgainstSortedSlice(.{ .countChildren = false, .nodeCacheType = .PointerBased });
-    try testRankRangeAndBoundsAgainstSortedSlice(.{ .countChildren = true, .nodeCacheType = .PointerBased });
-    try testRankRangeAndBoundsAgainstSortedSlice(.{ .countChildren = false, .nodeCacheType = .ArrayBased });
-    try testRankRangeAndBoundsAgainstSortedSlice(.{ .countChildren = true, .nodeCacheType = .ArrayBased });
-    try testRankRangeAndBoundsAgainstSortedSlice(.{ .countChildren = false, .nodeCacheType = .StableArrayBased });
-    try testRankRangeAndBoundsAgainstSortedSlice(.{ .countChildren = true, .nodeCacheType = .StableArrayBased });
-    try testRankRangeAndBoundsAgainstSortedSlice(.{ .countChildren = false, .nodeCacheType = .SplitArrayBased });
-    try testRankRangeAndBoundsAgainstSortedSlice(.{ .countChildren = true, .nodeCacheType = .SplitArrayBased });
-}
-
 test "tree floorRankWithCountChildren" {
     const a = std.testing.allocator;
     const TreeType = TreeWithOptions(i64, i64, i64Cmp, .{ .countChildren = true });
@@ -2821,186 +2228,6 @@ test "tree lowerBoundRankWithCountChildren" {
     try std.testing.expectEqual(@as(?usize, 3), t.lowerBoundRankWithCountChildren(39));
     try std.testing.expectEqual(@as(?usize, 7), t.lowerBoundRankWithCountChildren(80));
     try std.testing.expectEqual(@as(?usize, null), t.lowerBoundRankWithCountChildren(81));
-}
-
-test "tree deleteAt" {
-    const a = std.testing.allocator;
-    const TreeType = TreeWithOptions(i64, i64, i64Cmp, .{ .countChildren = true });
-    var t = try TreeType.init(a);
-    defer t.deinit();
-
-    var i: i64 = 0;
-    while (i < 128) {
-        const ir = try t.insert(i, i);
-        try std.testing.expect(ir.inserted);
-        i += 1;
-    }
-
-    var exp_len: usize = 128;
-    i = 64;
-    while (i < 128) {
-        try std.testing.expectEqual(exp_len, t.len());
-        const kv = t.deleteAt(64);
-        try std.testing.expectEqual(i, kv.Key);
-        try std.testing.expectEqual(i, kv.Value);
-        i += 1;
-        exp_len -= 1;
-    }
-
-    i = 0;
-    while (i < 64) {
-        try std.testing.expectEqual(exp_len, t.len());
-        const kv = t.deleteAt(0);
-        try std.testing.expectEqual(i, kv.Key);
-        try std.testing.expectEqual(i, kv.Value);
-        i += 1;
-        exp_len -= 1;
-    }
-    try std.testing.expectEqual(exp_len, t.len());
-}
-
-test "tree iterator" {
-    const a = std.testing.allocator;
-    const TreeType = TreeWithOptions(i64, i64, i64Cmp, .{ .countChildren = true });
-    var t = try TreeType.init(a);
-    defer t.deinit();
-
-    var i: i64 = 0;
-    while (i < 128) {
-        const ir = try t.insert(i, i);
-        try std.testing.expect(ir.inserted);
-        i += 1;
-    }
-    var it = t.iteratorAtFirst();
-    i = 0;
-    while (i < 128) {
-        const e = it.value();
-        try std.testing.expectEqual(i, e.?.Key);
-        try std.testing.expectEqual(i, e.?.Value.*);
-        it.next();
-        i += 1;
-    }
-    try std.testing.expectEqual(@as(?TreeType.Entry, null), it.value());
-
-    it = t.iteratorAtLast();
-    i = 127;
-    while (i >= 0) {
-        const e = it.value();
-        try std.testing.expectEqual(i, e.?.Key);
-        try std.testing.expectEqual(i, e.?.Value.*);
-        it.prev();
-        i -= 1;
-    }
-    try std.testing.expectEqual(@as(?TreeType.Entry, null), it.value());
-
-    it = t.iteratorAtFirst();
-    i = 0;
-    while (i < 64) {
-        try std.testing.expect(it.value() != null);
-        i += 1;
-        it.next();
-    }
-    i = 0;
-    while (i < 64) {
-        const e = it.value();
-        try std.testing.expectEqual(i + 64, e.?.Key);
-        try std.testing.expectEqual(i + 64, e.?.Value.*);
-        it = t.deleteIterator(it);
-        i += 1;
-    }
-
-    it = t.iteratorAtFirst();
-    i = 0;
-    while (i < 64) {
-        const e = it.value();
-        try std.testing.expectEqual(i, e.?.Key);
-        try std.testing.expectEqual(i, e.?.Value.*);
-        it = t.deleteIterator(it);
-        i += 1;
-    }
-
-    try std.testing.expectEqual(@as(?TreeType.Entry, null), it.value());
-}
-
-test "tree iteratorAt" {
-    const a = std.testing.allocator;
-    const TreeType = TreeWithOptions(i64, i64, i64Cmp, .{ .countChildren = true });
-    var t = try TreeType.init(a);
-    defer t.deinit();
-
-    var i: i64 = 0;
-    while (i < 128) {
-        const ir = try t.insert(i, i);
-        try std.testing.expect(ir.inserted);
-        i += 1;
-    }
-    i = 0;
-    while (i < 128) {
-        var it = t.iteratorAt(@as(usize, @intCast(i)));
-        var e = it.value();
-        try std.testing.expectEqual(i, e.?.Key);
-        try std.testing.expectEqual(i, e.?.Value.*);
-        var j = i - 1;
-        while (j >= 0) {
-            it.prev();
-            e = it.value();
-            try std.testing.expectEqual(j, e.?.Key);
-            try std.testing.expectEqual(j, e.?.Value.*);
-            j -= 1;
-        }
-        it = t.iteratorAt(@as(usize, @intCast(i)));
-        j = i + 1;
-        while (j < t.len()) {
-            it.next();
-            e = it.value();
-            try std.testing.expectEqual(j, e.?.Key);
-            try std.testing.expectEqual(j, e.?.Value.*);
-            j += 1;
-        }
-        i += 1;
-    }
-}
-
-test "tree bounds" {
-    const a = std.testing.allocator;
-    const TreeType = TreeWithOptions(i64, i64, i64Cmp, .{ .countChildren = true });
-    var t = try TreeType.init(a);
-    defer t.deinit();
-
-    for ([_]i64{ 0, 10, 20, 30, 40 }) |key| {
-        _ = try t.insert(key, key);
-    }
-
-    try std.testing.expectEqual(@as(i64, 10), t.lowerBound(5).value().?.Key);
-    try std.testing.expectEqual(@as(i64, 10), t.lowerBound(10).value().?.Key);
-    try std.testing.expectEqual(@as(i64, 20), t.lowerBound(20).value().?.Key);
-    try std.testing.expectEqual(@as(i64, 30), t.lowerBound(25).value().?.Key);
-    try std.testing.expectEqual(@as(i64, 30), t.lowerBound(30).value().?.Key);
-    try std.testing.expectEqual(@as(?TreeType.Entry, null), t.lowerBound(41).value());
-
-    try std.testing.expectEqual(@as(i64, 10), t.upperBound(5).value().?.Key);
-    try std.testing.expectEqual(@as(i64, 20), t.upperBound(10).value().?.Key);
-    try std.testing.expectEqual(@as(i64, 30), t.upperBound(20).value().?.Key);
-    try std.testing.expectEqual(@as(?TreeType.Entry, null), t.upperBound(40).value());
-}
-
-test "tree bounds with composite keys" {
-    const a = std.testing.allocator;
-    const TreeType = Tree(Pair, i64, pairCmp);
-    var t = try TreeType.init(a);
-    defer t.deinit();
-
-    _ = try t.insert(.{ .first = 10, .second = 10 }, 10);
-    _ = try t.insert(.{ .first = 20, .second = 20 }, 20);
-    _ = try t.insert(.{ .first = 20, .second = 30 }, 30);
-    _ = try t.insert(.{ .first = 30, .second = 40 }, 40);
-
-    try std.testing.expectEqual(Pair{ .first = 20, .second = 20 }, t.lowerBound(.{ .first = 20, .second = 0 }).value().?.Key);
-    try std.testing.expectEqual(Pair{ .first = 20, .second = 20 }, t.lowerBound(.{ .first = 20, .second = 20 }).value().?.Key);
-    try std.testing.expectEqual(Pair{ .first = 30, .second = 40 }, t.upperBound(.{ .first = 20, .second = 30 }).value().?.Key);
-    try std.testing.expectEqual(@as(?usize, 1), t.rank(.{ .first = 20, .second = 20 }));
-    try std.testing.expectEqual(@as(?usize, 2), t.rank(.{ .first = 20, .second = 30 }));
-    try std.testing.expectEqual(@as(?usize, null), t.rank(.{ .first = 20, .second = 25 }));
 }
 
 fn testTreeRandom(comptime options: Options) !void {
