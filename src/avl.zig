@@ -474,13 +474,23 @@ fn InitTreeType(comptime K: type, comptime V: type, comptime Cache: type, compti
             }
         }
 
-        fn linkSortedLocations(self: *Self, locs: []const Location, lo: usize, hi: usize) ?Location {
+        // buildLocation resolves a node created at items[index]. Indexed caches
+        // already use the item index as its dense storage address; pointer caches
+        // need the temporary location list populated during node creation.
+        fn buildLocation(self: *Self, locs: ?[]const Location, index: usize) Location {
+            if (cacheCapabilities.hasIndexedStorage) {
+                return self.lc.locationAt(index);
+            }
+            return locs.?[index];
+        }
+
+        fn linkSortedLocations(self: *Self, locs: ?[]const Location, lo: usize, hi: usize) ?Location {
             if (lo == hi) {
                 return null;
             }
 
             const mid = lo + (hi - lo) / 2;
-            var mut_loc = locs[mid];
+            var mut_loc = self.buildLocation(locs, mid);
 
             var left = self.linkSortedLocations(locs, lo, mid);
             if (left) |*l| {
@@ -504,10 +514,12 @@ fn InitTreeType(comptime K: type, comptime V: type, comptime Cache: type, compti
         // buildFromSorted replaces the tree with the strictly sorted key/value
         // pairs in items. If items aren't sorted, or there are
         // duplicate keys, ItemsNotStrictlySorted is returned.
-        // If allocating the temporary location list fails, the existing tree is
-        // preserved. If preparing replacement storage or allocating a new node
-        // fails after replacement starts, the partially built tree is discarded
-        // and this tree becomes empty.
+        // Pointer caches allocate a temporary location list before clearing the
+        // existing tree, so failure to allocate it preserves the tree. Indexed
+        // caches resolve newly created nodes directly by storage position and do
+        // not need that O(n) temporary allocation. If preparing replacement
+        // storage or allocating a node fails after replacement starts, the
+        // partially built tree is discarded and this tree becomes empty.
         //
         // Time complexity: O(n). Address-based ordered caches store nodes in the
         // same order as items, so O(1) positional access and ordered-storage key
@@ -520,8 +532,11 @@ fn InitTreeType(comptime K: type, comptime V: type, comptime Cache: type, compti
                 return;
             }
 
-            const locs = try self.a.alloc(Location, items.len);
-            defer self.a.free(locs);
+            const locs: ?[]Location = if (cacheCapabilities.hasIndexedStorage)
+                null
+            else
+                try self.a.alloc(Location, items.len);
+            defer if (locs) |allocated| self.a.free(allocated);
 
             self.clear();
             if (cacheCapabilities.hasNodeReservation) {
@@ -530,21 +545,24 @@ fn InitTreeType(comptime K: type, comptime V: type, comptime Cache: type, compti
             var created: usize = 0;
             errdefer {
                 // Nodes are not linked yet, so cache-level destruction is enough.
-                for (locs[0..created]) |loc| {
-                    self.lc.destroy(loc);
+                for (0..created) |idx| {
+                    self.lc.destroy(self.buildLocation(locs, idx));
                 }
                 self.resetTreeLinks();
             }
 
             for (items, 0..) |item, idx| {
-                locs[idx] = try self.createNewNode(item.Key, item.Value);
+                const loc = try self.createNewNode(item.Key, item.Value);
+                if (locs) |allocated| {
+                    allocated[idx] = loc;
+                }
                 created += 1;
             }
 
             self.length = items.len;
-            self.root = self.linkSortedLocations(locs, 0, locs.len);
-            self.min = locs[0];
-            self.max = locs[locs.len - 1];
+            self.root = self.linkSortedLocations(locs, 0, items.len);
+            self.min = self.buildLocation(locs, 0);
+            self.max = self.buildLocation(locs, items.len - 1);
             if (cacheCapabilities.hasOrderedStorage) {
                 self.storage_ordered = true;
             }
@@ -1676,6 +1694,18 @@ fn InitTreeType(comptime K: type, comptime V: type, comptime Cache: type, compti
 
 fn i64Cmp(a: i64, b: i64) math.Order {
     return math.order(a, b);
+}
+
+test "tree cache indexed storage capabilities" {
+    const PointerTree = TreeWithOptions(i64, i64, i64Cmp, .{ .nodeCacheType = .PointerBased });
+    const ArrayTree = TreeWithOptions(i64, i64, i64Cmp, .{ .nodeCacheType = .ArrayBased });
+    const StableTree = TreeWithOptions(i64, i64, i64Cmp, .{ .nodeCacheType = .StableArrayBased });
+    const SplitTree = TreeWithOptions(i64, i64, i64Cmp, .{ .nodeCacheType = .SplitArrayBased });
+
+    try std.testing.expect(!PointerTree.cacheCapabilities.hasIndexedStorage);
+    try std.testing.expect(ArrayTree.cacheCapabilities.hasIndexedStorage);
+    try std.testing.expect(StableTree.cacheCapabilities.hasIndexedStorage);
+    try std.testing.expect(SplitTree.cacheCapabilities.hasIndexedStorage);
 }
 
 fn testTreeBuildFromSortedWithItems(comptime TreeType: type, t: *TreeType, items: []const TreeType.KV, comptime shouldBeOrdered: bool) !void {

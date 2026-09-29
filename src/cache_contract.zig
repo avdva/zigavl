@@ -142,17 +142,22 @@ pub fn assertBaseRequirements(comptime Cache: type, comptime K: type, comptime V
 pub const Capabilities = struct {
     hasFastClear: bool,
     hasCompactStorage: bool,
+    // Indexed storage maps dense integer positions to locations. After clearing
+    // the cache, sequential create calls occupy positions starting at zero.
+    hasIndexedStorage: bool,
     hasOrderedStorage: bool,
     hasNodeReservation: bool,
 };
 
 pub fn getCapabilities(comptime Cache: type) Capabilities {
+    const has_indexed_storage = @hasDecl(Cache, "locationAt");
     return .{
         .hasFastClear = @hasDecl(Cache, "clearAll"),
         .hasCompactStorage = @hasDecl(Cache, "reclaim"),
+        .hasIndexedStorage = has_indexed_storage,
         .hasOrderedStorage = @hasDecl(Cache, "relocate") and
             @hasDecl(Cache, "finishOrderStorage") and
-            @hasDecl(Cache, "locationAt") and
+            has_indexed_storage and
             @hasDecl(Cache, "nextLocation") and
             @hasDecl(Cache, "prevLocation"),
         .hasNodeReservation = @hasDecl(Cache, "reserveNodes"),

@@ -116,9 +116,10 @@ Notes:
   existing iterators, locations, entries, and value pointers. Currently this is supported by `.ArrayBased`,
   `.StableArrayBased`, and `.SplitArrayBased`.
 - `buildFromSorted()` replaces the tree contents from strictly sorted unique `KV` items in `O(n)`. Invalid order or
-  duplicate keys return `error.ItemsNotStrictlySorted` before the existing tree is cleared. If the temporary location
-  list cannot be allocated, the existing tree is preserved; if allocating a replacement node fails, the tree is left
-  empty. Supported address-based caches are stored in key order immediately after the build.
+  duplicate keys return `error.ItemsNotStrictlySorted` before the existing tree is cleared. `.PointerBased` uses an
+  `O(n)` temporary location list, while address-based caches use `O(1)` auxiliary memory. Failure to allocate the
+  pointer-cache location list preserves the existing tree; an allocation failure after replacement starts leaves the
+  tree empty. Supported address-based caches are stored in key order immediately after the build.
 - `clear()` removes all elements and releases node storage owned by the tree. Complexity depends on storage backend:
   `O(n)` for `.PointerBased`, `O(1)` for `.ArrayBased` and `.SplitArrayBased`, and `O(number_of_chunks)` for
   `.StableArrayBased`.
