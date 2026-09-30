@@ -474,30 +474,20 @@ fn InitTreeType(comptime K: type, comptime V: type, comptime Cache: type, compti
             }
         }
 
-        // buildLocation resolves a node created at items[index]. Indexed caches
-        // already use the item index as its dense storage address; pointer caches
-        // need the temporary location list populated during node creation.
-        fn buildLocation(self: *Self, locs: ?[]const Location, index: usize) Location {
-            if (cacheCapabilities.hasIndexedStorage) {
-                return self.lc.locationAt(index);
-            }
-            return locs.?[index];
-        }
-
-        fn linkSortedLocations(self: *Self, locs: ?[]const Location, lo: usize, hi: usize) ?Location {
+        fn linkSortedLocations(self: *Self, locationGetter: anytype, lo: usize, hi: usize) ?Location {
             if (lo == hi) {
                 return null;
             }
 
             const mid = lo + (hi - lo) / 2;
-            var mut_loc = self.buildLocation(locs, mid);
+            var mut_loc: Location = locationGetter.locationAt(mid);
 
-            var left = self.linkSortedLocations(locs, lo, mid);
+            var left = self.linkSortedLocations(locationGetter, lo, mid);
             if (left) |*l| {
                 self.setChild(&mut_loc, .left, l.*);
                 self.setParent(l, mut_loc);
             }
-            var right = self.linkSortedLocations(locs, mid + 1, hi);
+            var right = self.linkSortedLocations(locationGetter, mid + 1, hi);
             if (right) |*r| {
                 self.setChild(&mut_loc, .right, r.*);
                 self.setParent(r, mut_loc);
@@ -532,11 +522,34 @@ fn InitTreeType(comptime K: type, comptime V: type, comptime Cache: type, compti
                 return;
             }
 
-            const locs: ?[]Location = if (cacheCapabilities.hasIndexedStorage)
-                null
-            else
-                try self.a.alloc(Location, items.len);
-            defer if (locs) |allocated| self.a.free(allocated);
+            var getter = if (cacheCapabilities.hasIndexedStorage) blk: {
+                const lcLocationGetter = struct {
+                    self: *Self,
+                    fn locationAt(getter: *@This(), index: usize) Location {
+                        return getter.self.lc.locationAt(index);
+                    }
+                    fn setLocationAt(_: *@This(), _: usize, _: Location) void {}
+                    fn deinit(_: *@This()) void {}
+                };
+                break :blk lcLocationGetter{ .self = self };
+            } else blk: {
+                const arrayLocationGetter = struct {
+                    a: std.mem.Allocator,
+                    locations: []Location,
+                    fn locationAt(alg: *@This(), index: usize) Location {
+                        return alg.locations[index];
+                    }
+                    fn setLocationAt(alg: *@This(), index: usize, loc: Location) void {
+                        alg.locations[index] = loc;
+                    }
+                    fn deinit(alg: *@This()) void {
+                        alg.a.free(alg.locations);
+                    }
+                };
+                break :blk arrayLocationGetter{ .a = self.a, .locations = try self.a.alloc(Location, items.len) };
+            };
+
+            defer getter.deinit();
 
             self.clear();
             if (cacheCapabilities.hasNodeReservation) {
@@ -546,23 +559,21 @@ fn InitTreeType(comptime K: type, comptime V: type, comptime Cache: type, compti
             errdefer {
                 // Nodes are not linked yet, so cache-level destruction is enough.
                 for (0..created) |idx| {
-                    self.lc.destroy(self.buildLocation(locs, idx));
+                    self.lc.destroy(getter.locationAt(idx));
                 }
                 self.resetTreeLinks();
             }
 
             for (items, 0..) |item, idx| {
                 const loc = try self.createNewNode(item.Key, item.Value);
-                if (locs) |allocated| {
-                    allocated[idx] = loc;
-                }
+                getter.setLocationAt(idx, loc);
                 created += 1;
             }
 
             self.length = items.len;
-            self.root = self.linkSortedLocations(locs, 0, items.len);
-            self.min = self.buildLocation(locs, 0);
-            self.max = self.buildLocation(locs, items.len - 1);
+            self.root = self.linkSortedLocations(&getter, 0, items.len);
+            self.min = getter.locationAt(0);
+            self.max = getter.locationAt(items.len - 1);
             if (cacheCapabilities.hasOrderedStorage) {
                 self.storage_ordered = true;
             }
