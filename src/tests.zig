@@ -268,6 +268,84 @@ test "tree buildFromSorted accepts empty input" {
     try std.testing.expectEqual(@as(?TreeType.Entry, null), t.getMax());
 }
 
+test "tree buildFromSorted preserves pointer tree when location allocation fails" {
+    var failing_allocator = std.testing.FailingAllocator.init(std.testing.allocator, .{});
+    const TreeType = TreeWithOptions(i64, i64, i64Cmp, .{ .nodeCacheType = .PointerBased });
+    var t = try TreeType.init(failing_allocator.allocator());
+    defer t.deinit();
+
+    _ = try t.insert(42, 420);
+    const items = [_]TreeType.KV{
+        .{ .Key = 1, .Value = 10 },
+        .{ .Key = 2, .Value = 20 },
+    };
+
+    failing_allocator.fail_index = failing_allocator.alloc_index;
+    try std.testing.expectError(error.OutOfMemory, t.buildFromSorted(&items));
+    try std.testing.expectEqual(@as(usize, 1), t.len());
+    try std.testing.expectEqual(@as(i64, 420), t.get(42).?.*);
+}
+
+test "tree buildFromSorted cleans up partially created pointer nodes" {
+    var failing_allocator = std.testing.FailingAllocator.init(std.testing.allocator, .{});
+    const TreeType = TreeWithOptions(i64, i64, i64Cmp, .{ .nodeCacheType = .PointerBased });
+    var t = try TreeType.init(failing_allocator.allocator());
+    defer t.deinit();
+
+    _ = try t.insert(42, 420);
+    const items = [_]TreeType.KV{
+        .{ .Key = 1, .Value = 10 },
+        .{ .Key = 2, .Value = 20 },
+        .{ .Key = 3, .Value = 30 },
+    };
+
+    // Allow the temporary location array and one node allocation to succeed.
+    failing_allocator.fail_index = failing_allocator.alloc_index + 2;
+    try std.testing.expectError(error.OutOfMemory, t.buildFromSorted(&items));
+    try std.testing.expectEqual(@as(usize, 0), t.len());
+    try std.testing.expectEqual(@as(?TreeType.Entry, null), t.getMin());
+    try std.testing.expectEqual(@as(?TreeType.Entry, null), t.getMax());
+    try std.testing.expectEqual(failing_allocator.allocated_bytes, failing_allocator.freed_bytes);
+}
+
+fn testBuildFromSortedReserveFailure(
+    comptime node_cache_type: lib.NodeCacheType,
+    item_count: usize,
+    successful_allocations: usize,
+) !void {
+    var failing_allocator = std.testing.FailingAllocator.init(std.testing.allocator, .{});
+    const TreeType = TreeWithOptions(i64, i64, i64Cmp, .{ .nodeCacheType = node_cache_type });
+    var t = try TreeType.init(failing_allocator.allocator());
+    var needs_deinit = true;
+    defer if (needs_deinit) t.deinit();
+
+    _ = try t.insert(42, 420);
+    const items = try std.testing.allocator.alloc(TreeType.KV, item_count);
+    defer std.testing.allocator.free(items);
+    for (items, 0..) |*item, idx| {
+        const key: i64 = @intCast(idx);
+        item.* = .{ .Key = key, .Value = key * 10 };
+    }
+
+    failing_allocator.fail_index = failing_allocator.alloc_index + successful_allocations;
+    try std.testing.expectError(error.OutOfMemory, t.buildFromSorted(items));
+    try std.testing.expectEqual(@as(usize, 0), t.len());
+    try std.testing.expectEqual(@as(?TreeType.Entry, null), t.getMin());
+    try std.testing.expectEqual(@as(?TreeType.Entry, null), t.getMax());
+
+    t.deinit();
+    needs_deinit = false;
+    try std.testing.expectEqual(failing_allocator.allocated_bytes, failing_allocator.freed_bytes);
+}
+
+test "tree buildFromSorted handles address cache reservation failures" {
+    try testBuildFromSortedReserveFailure(.ArrayBased, 32, 0);
+    // SplitArrayBased reserves its parallel arrays one at a time.
+    try testBuildFromSortedReserveFailure(.SplitArrayBased, 32, 2);
+    // StableArrayBased reserves the chunk pointer array, then individual chunks.
+    try testBuildFromSortedReserveFailure(.StableArrayBased, 2049, 2);
+}
+
 test "tree orderStorageByKey is noop for pointer cache" {
     const a = std.testing.allocator;
     const TreeType = TreeWithOptions(i64, i64, i64Cmp, .{ .nodeCacheType = .PointerBased });

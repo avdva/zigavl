@@ -20,6 +20,8 @@ pub fn LocationCache(comptime K: type, comptime V: type, comptime Tags: type) ty
             }
         };
 
+        pub const SequentialBuilder = cache_contract.MakeIndexedSequentialBuilder(Self);
+
         const Links = struct {
             left: Address = InvalidAddr,
             right: Address = InvalidAddr,
@@ -127,6 +129,12 @@ pub fn LocationCache(comptime K: type, comptime V: type, comptime Tags: type) ty
             self.metas.appendAssumeCapacity(.{});
             self.links.appendAssumeCapacity(.{ .used = .{} });
             return Location.init(addr);
+        }
+
+        // beginSequentialBuild creates a session that reserves every parallel
+        // array and maps each newly appended node to their shared dense position.
+        pub fn beginSequentialBuild(self: *Self, count: usize) !SequentialBuilder {
+            return SequentialBuilder.init(self, count);
         }
 
         pub fn destroy(self: *Self, loc: Location) void {

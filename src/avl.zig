@@ -474,20 +474,20 @@ fn InitTreeType(comptime K: type, comptime V: type, comptime Cache: type, compti
             }
         }
 
-        fn linkSortedLocations(self: *Self, locs: []const Location, lo: usize, hi: usize) ?Location {
+        fn linkSortedLocations(self: *Self, builder: anytype, lo: usize, hi: usize) ?Location {
             if (lo == hi) {
                 return null;
             }
 
             const mid = lo + (hi - lo) / 2;
-            var mut_loc = locs[mid];
+            var mut_loc: Location = builder.locationAt(mid);
 
-            var left = self.linkSortedLocations(locs, lo, mid);
+            var left = self.linkSortedLocations(builder, lo, mid);
             if (left) |*l| {
                 self.setChild(&mut_loc, .left, l.*);
                 self.setParent(l, mut_loc);
             }
-            var right = self.linkSortedLocations(locs, mid + 1, hi);
+            var right = self.linkSortedLocations(builder, mid + 1, hi);
             if (right) |*r| {
                 self.setChild(&mut_loc, .right, r.*);
                 self.setParent(r, mut_loc);
@@ -504,10 +504,12 @@ fn InitTreeType(comptime K: type, comptime V: type, comptime Cache: type, compti
         // buildFromSorted replaces the tree with the strictly sorted key/value
         // pairs in items. If items aren't sorted, or there are
         // duplicate keys, ItemsNotStrictlySorted is returned.
-        // If allocating the temporary location list fails, the existing tree is
-        // preserved. If preparing replacement storage or allocating a new node
-        // fails after replacement starts, the partially built tree is discarded
-        // and this tree becomes empty.
+        // Pointer caches allocate a temporary location list before clearing the
+        // existing tree, so failure to allocate it preserves the tree. Indexed
+        // caches resolve newly created nodes directly by storage position and do
+        // not need that O(n) temporary allocation. If preparing replacement
+        // storage or allocating a node fails after replacement starts, the
+        // partially built tree is discarded and this tree becomes empty.
         //
         // Time complexity: O(n). Address-based ordered caches store nodes in the
         // same order as items, so O(1) positional access and ordered-storage key
@@ -520,34 +522,26 @@ fn InitTreeType(comptime K: type, comptime V: type, comptime Cache: type, compti
                 return;
             }
 
-            const locs = try self.a.alloc(Location, items.len);
-            defer self.a.free(locs);
+            var builder = try self.lc.beginSequentialBuild(items.len);
+            defer builder.deinit();
 
             self.clear();
-            if (cacheCapabilities.hasNodeReservation) {
-                try self.lc.reserveNodes(items.len);
-            }
-            var created: usize = 0;
-            errdefer {
-                // Nodes are not linked yet, so cache-level destruction is enough.
-                for (locs[0..created]) |loc| {
-                    self.lc.destroy(loc);
-                }
-                self.resetTreeLinks();
-            }
+            errdefer self.resetTreeLinks();
+            try builder.prepare();
 
-            for (items, 0..) |item, idx| {
-                locs[idx] = try self.createNewNode(item.Key, item.Value);
-                created += 1;
+            for (items) |item| {
+                const loc = try builder.append();
+                self.initializeNode(loc, item.Key, item.Value);
             }
 
             self.length = items.len;
-            self.root = self.linkSortedLocations(locs, 0, locs.len);
-            self.min = locs[0];
-            self.max = locs[locs.len - 1];
+            self.root = self.linkSortedLocations(&builder, 0, items.len);
+            self.min = builder.locationAt(0);
+            self.max = builder.locationAt(items.len - 1);
             if (cacheCapabilities.hasOrderedStorage) {
                 self.storage_ordered = true;
             }
+            builder.commit();
         }
 
         // compactStorage asks the backing node cache to release storage kept by
@@ -603,17 +597,21 @@ fn InitTreeType(comptime K: type, comptime V: type, comptime Cache: type, compti
             return self.length;
         }
 
-        fn createNewNode(self: *Self, k: ?K, v: ?V) !Location {
-            const new_loc = try self.lc.create();
-            const m = self.meta(new_loc);
+        fn initializeNode(self: *Self, loc: Location, k: ?K, v: ?V) void {
+            const m = self.meta(loc);
             m.tags.* = .{};
             m.height.* = 0;
             if (k) |kVal| {
-                self.keyPtr(new_loc).* = kVal;
+                self.keyPtr(loc).* = kVal;
             }
             if (v) |vVal| {
-                self.valuePtr(new_loc).* = vVal;
+                self.valuePtr(loc).* = vVal;
             }
+        }
+
+        fn createNewNode(self: *Self, k: ?K, v: ?V) !Location {
+            const new_loc = try self.lc.create();
+            self.initializeNode(new_loc, k, v);
             return new_loc;
         }
 
