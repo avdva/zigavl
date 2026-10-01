@@ -70,6 +70,7 @@ pub fn LocationCache(comptime K: type, comptime V: type, comptime Tags: type) ty
     return struct {
         const Self = @This();
         pub const Location = MakePtrLocationType(K, V, Tags);
+        pub const SequentialBuilder = cache_contract.MakeLocationListSequentialBuilder(Self);
 
         a: std.mem.Allocator,
         fast_deinit_allowed: bool,
@@ -87,6 +88,12 @@ pub fn LocationCache(comptime K: type, comptime V: type, comptime Tags: type) ty
             const node = try self.a.create(Location.Node);
             node.* = Location.Node.init();
             return Location.init(node);
+        }
+
+        // beginSequentialBuild allocates the location index required to link
+        // separately allocated nodes after they have been created.
+        pub fn beginSequentialBuild(self: *Self, count: usize) !SequentialBuilder {
+            return SequentialBuilder.init(self, self.a, count);
         }
 
         pub fn destroy(self: *Self, loc: Location) void {

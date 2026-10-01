@@ -57,6 +57,8 @@ pub fn LocationCache(comptime K: type, comptime V: type, comptime Tags: type) ty
             slots: [chunk_len]Slot = undefined,
         };
 
+        pub const SequentialBuilder = cache_contract.MakeIndexedSequentialBuilder(Self);
+
         a: std.mem.Allocator,
         fast_deinit_allowed: bool,
         chunks: std.ArrayList(*Chunk),
@@ -132,6 +134,12 @@ pub fn LocationCache(comptime K: type, comptime V: type, comptime Tags: type) ty
             self.len += 1;
             self.slot(addr).* = Slot{ .used = Node.init() };
             return Location.init(addr);
+        }
+
+        // beginSequentialBuild creates a session that reserves chunks and maps
+        // each newly appended node to its dense chunked-storage position.
+        pub fn beginSequentialBuild(self: *Self, count: usize) !SequentialBuilder {
+            return SequentialBuilder.init(self, count);
         }
 
         // destroy only returns the slot to this cache's free-list. Chunks are

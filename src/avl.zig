@@ -474,20 +474,20 @@ fn InitTreeType(comptime K: type, comptime V: type, comptime Cache: type, compti
             }
         }
 
-        fn linkSortedLocations(self: *Self, locationGetter: anytype, lo: usize, hi: usize) ?Location {
+        fn linkSortedLocations(self: *Self, builder: anytype, lo: usize, hi: usize) ?Location {
             if (lo == hi) {
                 return null;
             }
 
             const mid = lo + (hi - lo) / 2;
-            var mut_loc: Location = locationGetter.locationAt(mid);
+            var mut_loc: Location = builder.locationAt(mid);
 
-            var left = self.linkSortedLocations(locationGetter, lo, mid);
+            var left = self.linkSortedLocations(builder, lo, mid);
             if (left) |*l| {
                 self.setChild(&mut_loc, .left, l.*);
                 self.setParent(l, mut_loc);
             }
-            var right = self.linkSortedLocations(locationGetter, mid + 1, hi);
+            var right = self.linkSortedLocations(builder, mid + 1, hi);
             if (right) |*r| {
                 self.setChild(&mut_loc, .right, r.*);
                 self.setParent(r, mut_loc);
@@ -522,61 +522,26 @@ fn InitTreeType(comptime K: type, comptime V: type, comptime Cache: type, compti
                 return;
             }
 
-            var getter = if (cacheCapabilities.hasIndexedStorage) blk: {
-                const lcLocationGetter = struct {
-                    self: *Self,
-                    fn locationAt(getter: *@This(), index: usize) Location {
-                        return getter.self.lc.locationAt(index);
-                    }
-                    fn setLocationAt(_: *@This(), _: usize, _: Location) void {}
-                    fn deinit(_: *@This()) void {}
-                };
-                break :blk lcLocationGetter{ .self = self };
-            } else blk: {
-                const arrayLocationGetter = struct {
-                    a: std.mem.Allocator,
-                    locations: []Location,
-                    fn locationAt(alg: *@This(), index: usize) Location {
-                        return alg.locations[index];
-                    }
-                    fn setLocationAt(alg: *@This(), index: usize, loc: Location) void {
-                        alg.locations[index] = loc;
-                    }
-                    fn deinit(alg: *@This()) void {
-                        alg.a.free(alg.locations);
-                    }
-                };
-                break :blk arrayLocationGetter{ .a = self.a, .locations = try self.a.alloc(Location, items.len) };
-            };
-
-            defer getter.deinit();
+            var builder = try self.lc.beginSequentialBuild(items.len);
+            defer builder.deinit();
 
             self.clear();
-            if (cacheCapabilities.hasNodeReservation) {
-                try self.lc.reserveNodes(items.len);
-            }
-            var created: usize = 0;
-            errdefer {
-                // Nodes are not linked yet, so cache-level destruction is enough.
-                for (0..created) |idx| {
-                    self.lc.destroy(getter.locationAt(idx));
-                }
-                self.resetTreeLinks();
-            }
+            errdefer self.resetTreeLinks();
+            try builder.prepare();
 
-            for (items, 0..) |item, idx| {
-                const loc = try self.createNewNode(item.Key, item.Value);
-                getter.setLocationAt(idx, loc);
-                created += 1;
+            for (items) |item| {
+                const loc = try builder.append();
+                self.initializeNode(loc, item.Key, item.Value);
             }
 
             self.length = items.len;
-            self.root = self.linkSortedLocations(&getter, 0, items.len);
-            self.min = getter.locationAt(0);
-            self.max = getter.locationAt(items.len - 1);
+            self.root = self.linkSortedLocations(&builder, 0, items.len);
+            self.min = builder.locationAt(0);
+            self.max = builder.locationAt(items.len - 1);
             if (cacheCapabilities.hasOrderedStorage) {
                 self.storage_ordered = true;
             }
+            builder.commit();
         }
 
         // compactStorage asks the backing node cache to release storage kept by
@@ -632,17 +597,21 @@ fn InitTreeType(comptime K: type, comptime V: type, comptime Cache: type, compti
             return self.length;
         }
 
-        fn createNewNode(self: *Self, k: ?K, v: ?V) !Location {
-            const new_loc = try self.lc.create();
-            const m = self.meta(new_loc);
+        fn initializeNode(self: *Self, loc: Location, k: ?K, v: ?V) void {
+            const m = self.meta(loc);
             m.tags.* = .{};
             m.height.* = 0;
             if (k) |kVal| {
-                self.keyPtr(new_loc).* = kVal;
+                self.keyPtr(loc).* = kVal;
             }
             if (v) |vVal| {
-                self.valuePtr(new_loc).* = vVal;
+                self.valuePtr(loc).* = vVal;
             }
+        }
+
+        fn createNewNode(self: *Self, k: ?K, v: ?V) !Location {
+            const new_loc = try self.lc.create();
+            self.initializeNode(new_loc, k, v);
             return new_loc;
         }
 
@@ -1705,18 +1674,6 @@ fn InitTreeType(comptime K: type, comptime V: type, comptime Cache: type, compti
 
 fn i64Cmp(a: i64, b: i64) math.Order {
     return math.order(a, b);
-}
-
-test "tree cache indexed storage capabilities" {
-    const PointerTree = TreeWithOptions(i64, i64, i64Cmp, .{ .nodeCacheType = .PointerBased });
-    const ArrayTree = TreeWithOptions(i64, i64, i64Cmp, .{ .nodeCacheType = .ArrayBased });
-    const StableTree = TreeWithOptions(i64, i64, i64Cmp, .{ .nodeCacheType = .StableArrayBased });
-    const SplitTree = TreeWithOptions(i64, i64, i64Cmp, .{ .nodeCacheType = .SplitArrayBased });
-
-    try std.testing.expect(!PointerTree.cacheCapabilities.hasIndexedStorage);
-    try std.testing.expect(ArrayTree.cacheCapabilities.hasIndexedStorage);
-    try std.testing.expect(StableTree.cacheCapabilities.hasIndexedStorage);
-    try std.testing.expect(SplitTree.cacheCapabilities.hasIndexedStorage);
 }
 
 fn testTreeBuildFromSortedWithItems(comptime TreeType: type, t: *TreeType, items: []const TreeType.KV, comptime shouldBeOrdered: bool) !void {

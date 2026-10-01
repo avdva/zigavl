@@ -50,6 +50,7 @@ pub fn LocationCache(comptime K: type, comptime V: type, comptime Tags: type) ty
         };
 
         const Slot = address_storage.MakeSlot(Node);
+        pub const SequentialBuilder = cache_contract.MakeIndexedSequentialBuilder(Self);
 
         a: std.mem.Allocator,
         fast_deinit_allowed: bool,
@@ -101,6 +102,12 @@ pub fn LocationCache(comptime K: type, comptime V: type, comptime Tags: type) ty
             const addr: Address = @intCast(self.nodes.items.len);
             try self.nodes.append(self.a, Slot{ .used = Node.init() });
             return Location.init(addr);
+        }
+
+        // beginSequentialBuild creates a session that reserves storage and maps
+        // each newly appended node to its dense array position.
+        pub fn beginSequentialBuild(self: *Self, count: usize) !SequentialBuilder {
+            return SequentialBuilder.init(self, count);
         }
 
         // destroy only returns the slot to this cache's free-list. The backing
