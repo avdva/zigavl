@@ -89,11 +89,12 @@ fn InitTreeType(comptime K: type, comptime V: type, comptime Cache: type, compti
             return self.lc.meta(loc);
         }
 
-        fn setHeight(self: *Self, loc: Location, height: u8) bool {
-            const height_ptr = self.meta(loc).height;
-            const old = height_ptr.*;
-            height_ptr.* = height;
-            return old != height;
+        fn balance(self: *Self, loc: Location) i8 {
+            return self.meta(loc).balance.*;
+        }
+
+        fn setBalance(self: *Self, loc: Location, value: i8) void {
+            self.meta(loc).balance.* = value;
         }
 
         fn child(self: *Self, loc: Location, comptime dir: direction) ?Location {
@@ -330,31 +331,6 @@ fn InitTreeType(comptime K: type, comptime V: type, comptime Cache: type, compti
             return 0;
         }
 
-        // recalcHeight refreshes loc's cached AVL height from its children.
-        // It returns true when the height changed, which lets insertion rebalance
-        // stop early once ancestors cannot be affected.
-        fn recalcHeight(self: *Self, loc: Location) bool {
-            var h: u8 = 0;
-            if (self.child(loc, .left)) |l| {
-                h = 1 + self.meta(l).height.*;
-            }
-            if (self.child(loc, .right)) |r| {
-                h = @max(h, 1 + self.meta(r).height.*);
-            }
-            return self.setHeight(loc, h);
-        }
-
-        fn balance(self: *Self, loc: Location) i8 {
-            var b: i8 = 0;
-            if (self.child(loc, .right)) |right| {
-                b += 1 + @as(i8, @intCast(self.meta(right).height.*));
-            }
-            if (self.child(loc, .left)) |left| {
-                b -= 1 + @as(i8, @intCast(self.meta(left).height.*));
-            }
-            return b;
-        }
-
         // Iterator traverses the tree.
         pub const Iterator = struct {
             tree: *Self,
@@ -474,31 +450,39 @@ fn InitTreeType(comptime K: type, comptime V: type, comptime Cache: type, compti
             }
         }
 
-        fn linkSortedLocations(self: *Self, builder: anytype, lo: usize, hi: usize) ?Location {
+        const LinkedSubtree = struct {
+            loc: ?Location,
+            height: u8,
+        };
+
+        fn linkSortedLocations(self: *Self, builder: anytype, lo: usize, hi: usize) LinkedSubtree {
             if (lo == hi) {
-                return null;
+                return .{ .loc = null, .height = 0 };
             }
 
             const mid = lo + (hi - lo) / 2;
             var mut_loc: Location = builder.locationAt(mid);
 
             var left = self.linkSortedLocations(builder, lo, mid);
-            if (left) |*l| {
+            if (left.loc) |*l| {
                 self.setChild(&mut_loc, .left, l.*);
                 self.setParent(l, mut_loc);
             }
             var right = self.linkSortedLocations(builder, mid + 1, hi);
-            if (right) |*r| {
+            if (right.loc) |*r| {
                 self.setChild(&mut_loc, .right, r.*);
                 self.setParent(r, mut_loc);
             }
 
-            _ = self.recalcHeight(mut_loc);
+            self.setBalance(mut_loc, @as(i8, @intCast(right.height)) - @as(i8, @intCast(left.height)));
             if (options.countChildren) {
                 self.recalcCounts(mut_loc);
             }
 
-            return mut_loc;
+            return .{
+                .loc = mut_loc,
+                .height = 1 + @max(left.height, right.height),
+            };
         }
 
         // buildFromSorted replaces the tree with the strictly sorted key/value
@@ -535,7 +519,7 @@ fn InitTreeType(comptime K: type, comptime V: type, comptime Cache: type, compti
             }
 
             self.length = items.len;
-            self.root = self.linkSortedLocations(&builder, 0, items.len);
+            self.root = self.linkSortedLocations(&builder, 0, items.len).loc;
             self.min = builder.locationAt(0);
             self.max = builder.locationAt(items.len - 1);
             if (cacheCapabilities.hasOrderedStorage) {
@@ -600,7 +584,7 @@ fn InitTreeType(comptime K: type, comptime V: type, comptime Cache: type, compti
         fn initializeNode(self: *Self, loc: Location, k: ?K, v: ?V) void {
             const m = self.meta(loc);
             m.tags.* = .{};
-            m.height.* = 0;
+            m.balance.* = 0;
             if (k) |kVal| {
                 self.keyPtr(loc).* = kVal;
             }
@@ -718,16 +702,7 @@ fn InitTreeType(comptime K: type, comptime V: type, comptime Cache: type, compti
                     } else if (where.dir == .right and self.locEq(l, self.max.?)) {
                         self.max = new_loc;
                     }
-                    if (self.recalcHeight(l)) {
-                        if (options.countChildren) {
-                            self.adjustDescendantCount(l, 1);
-                        }
-                        self.checkBalance(self.parent(l), false, 1);
-                    } else {
-                        if (options.countChildren) {
-                            self.adjustDescendantCountsUpwards(l, 1);
-                        }
-                    }
+                    self.rebalanceAfterInsert(l, new_loc);
                 },
                 .center => {
                     self.root = new_loc;
@@ -778,7 +753,7 @@ fn InitTreeType(comptime K: type, comptime V: type, comptime Cache: type, compti
 
             const m = self.meta(loc);
             m.tags.* = .{};
-            m.height.* = 0;
+            m.balance.* = 0;
             self.keyPtr(loc).* = k;
             self.valuePtr(loc).* = v;
         }
@@ -840,6 +815,7 @@ fn InitTreeType(comptime K: type, comptime V: type, comptime Cache: type, compti
         // may have changed.
         fn deleteAndReplace(self: *Self, loc: Location) void {
             const replacement = self.findReplacement(loc);
+            const removed_balance = self.balance(loc);
             if (self.min) |min| {
                 if (self.locEq(loc, min)) {
                     self.min = self.nextInOrderLocation(loc);
@@ -856,6 +832,11 @@ fn InitTreeType(comptime K: type, comptime V: type, comptime Cache: type, compti
                 const replacement_parent = self.parent(rep).?;
                 const replacement_dir = self.childDir(replacement_parent, rep);
                 const inverted = replacement_dir.invert();
+                const balance_delta: i8 = switch (replacement_dir) {
+                    .left => 1,
+                    .right => -1,
+                    else => unreachable,
+                };
                 if (self.locEq(replacement_parent, loc)) {
                     if (parent_loc) |p| {
                         self.reparent(p, self.childDir(p, loc), rep);
@@ -863,7 +844,8 @@ fn InitTreeType(comptime K: type, comptime V: type, comptime Cache: type, compti
                         self.setRoot(rep);
                     }
                     self.reparent(rep, inverted, self.childAt(loc, inverted));
-                    self.checkBalance(rep, true, null);
+                    self.setBalance(rep, removed_balance);
+                    self.rebalanceAfterDelete(rep, balance_delta, null);
                     return;
                 }
                 const replacement_child = self.childAt(rep, inverted);
@@ -875,11 +857,18 @@ fn InitTreeType(comptime K: type, comptime V: type, comptime Cache: type, compti
                 }
                 self.reparent(rep, .left, self.child(loc, .left));
                 self.reparent(rep, .right, self.child(loc, .right));
-                self.checkBalance(replacement_parent, true, null);
+                self.setBalance(rep, removed_balance);
+                self.rebalanceAfterDelete(replacement_parent, balance_delta, null);
             } else {
                 if (parent_loc) |p| {
-                    self.reparent(p, self.childDir(p, loc), replacement);
-                    self.checkBalance(p, false, -1);
+                    const removed_dir = self.childDir(p, loc);
+                    self.reparent(p, removed_dir, replacement);
+                    const balance_delta: i8 = switch (removed_dir) {
+                        .left => 1,
+                        .right => -1,
+                        else => unreachable,
+                    };
+                    self.rebalanceAfterDelete(p, balance_delta, -1);
                 } else {
                     self.setRoot(null);
                 }
@@ -1305,101 +1294,135 @@ fn InitTreeType(comptime K: type, comptime V: type, comptime Cache: type, compti
             }
         }
 
-        // checkBalance walks from loc toward the root, recalculating heights and
-        // child counts and rotating the first unbalanced subtree it finds.
-        //
-        // When all_way_up is false, the walk stops once a node height does not
-        // change: ancestors above it cannot become newly unbalanced. When it is
-        // true, the walk continues to the root because the caller already knows
-        // that ancestor counts/heights may need a full refresh after relinking.
-        //
-        // A non-null count_delta is used when every visited subtree gains or loses
-        // the same number of nodes. A null value recomputes counts from child
-        // subtrees, which is required after moving a replacement node during delete.
-        //
-        // balance(l) == -2 means the left subtree is too tall. The child balance
-        // chooses a single right rotation (rr) or a double left-right rotation (lr).
-        // balance(l) == 2 mirrors that with right-left (rl) or single left (ll).
-        fn checkBalance(self: *Self, loc: ?Location, all_way_up: bool, count_delta: ?i32) void {
-            var mut_loc = loc;
-            while (mut_loc) |*mut_loc_ptr| {
-                const current_loc = mut_loc_ptr.*;
+        fn updateRemainingCounts(self: *Self, loc: ?Location, count_delta: ?i32) void {
+            if (!options.countChildren) return;
+            const start = loc orelse return;
+            if (count_delta) |delta| {
+                self.adjustDescendantCountsUpwards(start, delta);
+            } else {
+                self.recalcCountsUpwards(start);
+            }
+        }
+
+        // rebalanceAfterInsert propagates a one-level subtree growth toward the
+        // root. A zero balance stops the walk; reaching +/-2 performs one AVL
+        // rotation and also stops because insertion cannot shrink the result.
+        fn rebalanceAfterInsert(self: *Self, start: Location, inserted: Location) void {
+            var current: ?Location = start;
+            var grown_subtree = inserted;
+            while (current) |current_loc| {
                 const parent_loc = self.parent(current_loc);
-                // Reuse child metadata for balance, height, and descendant count.
-                // Rotations recalculate metadata after changing the links.
-                const left = self.child(current_loc, .left);
-                const right = self.child(current_loc, .right);
-                var left_height: u8 = 0;
-                var right_height: u8 = 0;
-                var count: u32 = 0;
-                if (left) |child_loc| {
-                    const m = self.meta(child_loc);
-                    left_height = m.height.* + 1;
-                    if (options.countChildren and count_delta == null) {
-                        count += 1 + m.tags.childrenCount;
-                    }
+                if (options.countChildren) {
+                    self.adjustDescendantCount(current_loc, 1);
                 }
-                if (right) |child_loc| {
-                    const m = self.meta(child_loc);
-                    right_height = m.height.* + 1;
-                    if (options.countChildren and count_delta == null) {
-                        count += 1 + m.tags.childrenCount;
-                    }
-                }
-                const b = @as(i8, @intCast(right_height)) - @as(i8, @intCast(left_height));
-                switch (b) {
+
+                const delta: i8 = switch (self.childDir(current_loc, grown_subtree)) {
+                    .left => -1,
+                    .right => 1,
+                    else => unreachable,
+                };
+                const new_balance = self.balance(current_loc) + delta;
+                switch (new_balance) {
+                    -1, 1 => {
+                        self.setBalance(current_loc, new_balance);
+                        grown_subtree = current_loc;
+                        current = parent_loc;
+                    },
+                    0 => {
+                        self.setBalance(current_loc, 0);
+                        self.updateRemainingCounts(parent_loc, 1);
+                        return;
+                    },
                     -2 => {
-                        const subRoot = blk: {
-                            switch (self.balance(left.?)) {
-                                -1, 0 => {
-                                    break :blk self.rr(current_loc);
-                                },
-                                1 => {
-                                    break :blk self.lr(current_loc);
-                                },
-                                else => unreachable,
-                            }
-                        };
-                        self.treeRotated(parent_loc, current_loc, subRoot);
+                        self.setBalance(current_loc, -2);
+                        const left = self.child(current_loc, .left).?;
+                        const sub_root = if (self.balance(left) == 1)
+                            self.lr(current_loc)
+                        else
+                            self.rr(current_loc);
+                        self.treeRotated(parent_loc, current_loc, sub_root);
+                        self.updateRemainingCounts(parent_loc, 1);
+                        return;
                     },
                     2 => {
-                        const subRoot = blk: {
-                            switch (self.balance(right.?)) {
-                                -1 => {
-                                    break :blk self.rl(current_loc);
-                                },
-                                0, 1 => {
-                                    break :blk self.ll(current_loc);
-                                },
-                                else => unreachable,
-                            }
-                        };
-                        self.treeRotated(parent_loc, current_loc, subRoot);
+                        self.setBalance(current_loc, 2);
+                        const right = self.child(current_loc, .right).?;
+                        const sub_root = if (self.balance(right) == -1)
+                            self.rl(current_loc)
+                        else
+                            self.ll(current_loc);
+                        self.treeRotated(parent_loc, current_loc, sub_root);
+                        self.updateRemainingCounts(parent_loc, 1);
+                        return;
                     },
-                    else => {
-                        const height_changed = self.setHeight(current_loc, @max(left_height, right_height));
-                        if (options.countChildren) {
-                            if (count_delta) |delta| {
-                                self.adjustDescendantCount(current_loc, delta);
-                            } else {
-                                self.meta(current_loc).tags.childrenCount = count;
-                            }
-                        }
-                        if (!height_changed and !all_way_up) {
-                            if (options.countChildren) {
-                                if (parent_loc) |p| {
-                                    if (count_delta) |delta| {
-                                        self.adjustDescendantCountsUpwards(p, delta);
-                                    } else {
-                                        self.recalcCountsUpwards(p);
-                                    }
-                                }
-                            }
-                            return;
-                        }
-                    },
+                    else => unreachable,
                 }
-                mut_loc = parent_loc;
+            }
+        }
+
+        // rebalanceAfterDelete propagates a subtree height decrease. delta is +1
+        // when the left side shrank and -1 when the right side shrank. Unlike
+        // insertion, deletion may require rotations all the way to the root.
+        fn rebalanceAfterDelete(self: *Self, start: ?Location, first_delta: i8, count_delta: ?i32) void {
+            var current = start;
+            var delta = first_delta;
+            while (current) |current_loc| {
+                const parent_loc = self.parent(current_loc);
+                if (options.countChildren) {
+                    if (count_delta) |count_adjustment| {
+                        self.adjustDescendantCount(current_loc, count_adjustment);
+                    } else {
+                        self.recalcCounts(current_loc);
+                    }
+                }
+
+                const new_balance = self.balance(current_loc) + delta;
+                var subtree_root = current_loc;
+                const height_decreased = switch (new_balance) {
+                    -1, 1 => blk: {
+                        self.setBalance(current_loc, new_balance);
+                        break :blk false;
+                    },
+                    0 => blk: {
+                        self.setBalance(current_loc, 0);
+                        break :blk true;
+                    },
+                    -2 => blk: {
+                        self.setBalance(current_loc, -2);
+                        const left = self.child(current_loc, .left).?;
+                        const child_balance = self.balance(left);
+                        subtree_root = if (child_balance == 1)
+                            self.lr(current_loc)
+                        else
+                            self.rr(current_loc);
+                        self.treeRotated(parent_loc, current_loc, subtree_root);
+                        break :blk child_balance != 0;
+                    },
+                    2 => blk: {
+                        self.setBalance(current_loc, 2);
+                        const right = self.child(current_loc, .right).?;
+                        const child_balance = self.balance(right);
+                        subtree_root = if (child_balance == -1)
+                            self.rl(current_loc)
+                        else
+                            self.ll(current_loc);
+                        self.treeRotated(parent_loc, current_loc, subtree_root);
+                        break :blk child_balance != 0;
+                    },
+                    else => unreachable,
+                };
+
+                if (!height_decreased) {
+                    self.updateRemainingCounts(parent_loc, count_delta);
+                    return;
+                }
+                const next_parent = parent_loc orelse return;
+                delta = switch (self.childDir(next_parent, subtree_root)) {
+                    .left => 1,
+                    .right => -1,
+                    else => unreachable,
+                };
+                current = next_parent;
             }
         }
 
@@ -1424,12 +1447,22 @@ fn InitTreeType(comptime K: type, comptime V: type, comptime Cache: type, compti
             const l = loc;
             const left = self.child(l, .left).?;
             const left_right = self.child(left, .right);
+            const left_balance = self.balance(left);
 
             self.reparent(l, .left, left_right);
             self.reparent(left, .right, l);
 
-            _ = self.recalcHeight(l);
-            _ = self.recalcHeight(left);
+            switch (left_balance) {
+                -1 => {
+                    self.setBalance(l, 0);
+                    self.setBalance(left, 0);
+                },
+                0 => {
+                    self.setBalance(l, -1);
+                    self.setBalance(left, 1);
+                },
+                else => unreachable,
+            }
 
             if (options.countChildren) {
                 self.recalcCounts(l);
@@ -1464,6 +1497,7 @@ fn InitTreeType(comptime K: type, comptime V: type, comptime Cache: type, compti
             const left_right = self.child(left, .right).?;
             const left_right_right = self.child(left_right, .right);
             const left_right_left = self.child(left_right, .left);
+            const middle_balance = self.balance(left_right);
 
             self.reparent(left_right, .right, l);
             self.reparent(left_right, .left, left);
@@ -1471,9 +1505,22 @@ fn InitTreeType(comptime K: type, comptime V: type, comptime Cache: type, compti
             self.reparent(l, .left, left_right_right);
             self.reparent(left, .right, left_right_left);
 
-            _ = self.recalcHeight(l);
-            _ = self.recalcHeight(left);
-            _ = self.recalcHeight(left_right);
+            switch (middle_balance) {
+                -1 => {
+                    self.setBalance(l, 1);
+                    self.setBalance(left, 0);
+                },
+                0 => {
+                    self.setBalance(l, 0);
+                    self.setBalance(left, 0);
+                },
+                1 => {
+                    self.setBalance(l, 0);
+                    self.setBalance(left, -1);
+                },
+                else => unreachable,
+            }
+            self.setBalance(left_right, 0);
 
             if (options.countChildren) {
                 self.recalcCounts(l);
@@ -1510,6 +1557,7 @@ fn InitTreeType(comptime K: type, comptime V: type, comptime Cache: type, compti
 
             const right_left_left = self.child(right_left, .left);
             const right_left_right = self.child(right_left, .right);
+            const middle_balance = self.balance(right_left);
 
             self.reparent(right_left, .left, l);
             self.reparent(right_left, .right, right);
@@ -1517,9 +1565,22 @@ fn InitTreeType(comptime K: type, comptime V: type, comptime Cache: type, compti
             self.reparent(l, .right, right_left_left);
             self.reparent(right, .left, right_left_right);
 
-            _ = self.recalcHeight(l);
-            _ = self.recalcHeight(right);
-            _ = self.recalcHeight(right_left);
+            switch (middle_balance) {
+                -1 => {
+                    self.setBalance(l, 0);
+                    self.setBalance(right, 1);
+                },
+                0 => {
+                    self.setBalance(l, 0);
+                    self.setBalance(right, 0);
+                },
+                1 => {
+                    self.setBalance(l, -1);
+                    self.setBalance(right, 0);
+                },
+                else => unreachable,
+            }
+            self.setBalance(right_left, 0);
 
             if (options.countChildren) {
                 self.recalcCounts(l);
@@ -1551,12 +1612,22 @@ fn InitTreeType(comptime K: type, comptime V: type, comptime Cache: type, compti
             const l = loc;
             const right = self.child(l, .right).?;
             const right_left = self.child(right, .left);
+            const right_balance = self.balance(right);
 
             self.reparent(l, .right, right_left);
             self.reparent(right, .left, l);
 
-            _ = self.recalcHeight(l);
-            _ = self.recalcHeight(right);
+            switch (right_balance) {
+                0 => {
+                    self.setBalance(l, 1);
+                    self.setBalance(right, -1);
+                },
+                1 => {
+                    self.setBalance(l, 0);
+                    self.setBalance(right, 0);
+                },
+                else => unreachable,
+            }
 
             if (options.countChildren) {
                 self.recalcCounts(l);
@@ -2239,9 +2310,9 @@ fn testTreeRandom(comptime options: Options) !void {
     }
     defer a.free(arr);
     var i: i64 = 0;
+    var r = std.Random.DefaultPrng.init(0);
     while (i < 10) {
         const exp_len: usize = 0;
-        var r = std.Random.DefaultPrng.init(0);
         r.random().shuffle(i64, arr);
         for (arr) |val| {
             const ir = try t.insert(val, val);
@@ -2402,18 +2473,23 @@ const recalcResult = struct {
 fn recalcHeightAndBalance(comptime T: type, tree: *T, loc: ?T.Location) !recalcResult {
     var result = recalcResult.init();
     const l = loc orelse return result;
+    var left_height: u8 = 0;
+    var right_height: u8 = 0;
     if (tree.child(l, .left) != null) {
         const lRes = try recalcHeightAndBalance(T, tree, tree.child(l, .left));
-        result.height = 1 + lRes.height;
+        left_height = 1 + lRes.height;
+        result.height = left_height;
         result.l_count = lRes.l_count + lRes.r_count + 1;
     }
     if (tree.child(l, .right) != null) {
         const rRes = try recalcHeightAndBalance(T, tree, tree.child(l, .right));
-        result.height = @max(result.height, 1 + rRes.height);
+        right_height = 1 + rRes.height;
+        result.height = @max(result.height, right_height);
         result.r_count = rRes.r_count + rRes.l_count + 1;
     }
-    try std.testing.expectEqual(result.height, tree.meta(l).height.*);
-    if (tree.balance(l) < -1 or tree.balance(l) > 1) {
+    const expected_balance = @as(i8, @intCast(right_height)) - @as(i8, @intCast(left_height));
+    try std.testing.expectEqual(expected_balance, tree.balance(l));
+    if (expected_balance < -1 or expected_balance > 1) {
         return error{
             InvalidBalance,
         }.InvalidBalance;

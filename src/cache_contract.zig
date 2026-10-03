@@ -3,7 +3,8 @@ const direction = @import("direction.zig").direction;
 
 pub fn Meta(comptime Tags: type) type {
     return struct {
-        height: *u8,
+        // AVL balance factor: right subtree height minus left subtree height.
+        balance: *i8,
         tags: *Tags,
     };
 }

@@ -86,8 +86,7 @@ fn nowNs() u64 {
     }
 }
 
-fn benchSequentialInsert(comptime name: []const u8, comptime options: zigavl.Options, a: std.mem.Allocator) !void {
-    const bench_name = name ++ "/insert/sequential";
+fn benchSequentialInsertAs(comptime bench_name: []const u8, comptime options: zigavl.Options, a: std.mem.Allocator) !void {
     const Tree = zigavl.TreeWithOptions(i64, i64, i64Cmp, options);
     var tree = try Tree.init(a);
     defer tree.deinit();
@@ -102,8 +101,11 @@ fn benchSequentialInsert(comptime name: []const u8, comptime options: zigavl.Opt
     report(bench_name, bench_len, nowNs() - start, checksum);
 }
 
-fn benchRandomInsert(comptime name: []const u8, comptime options: zigavl.Options, a: std.mem.Allocator, keys: []const i64) !void {
-    const bench_name = name ++ "/insert/random";
+fn benchSequentialInsert(comptime name: []const u8, comptime options: zigavl.Options, a: std.mem.Allocator) !void {
+    try benchSequentialInsertAs(name ++ "/insert/sequential", options, a);
+}
+
+fn benchRandomInsertAs(comptime bench_name: []const u8, comptime options: zigavl.Options, a: std.mem.Allocator, keys: []const i64) !void {
     const Tree = zigavl.TreeWithOptions(i64, i64, i64Cmp, options);
     var tree = try Tree.init(a);
     defer tree.deinit();
@@ -115,6 +117,23 @@ fn benchRandomInsert(comptime name: []const u8, comptime options: zigavl.Options
         checksum += result.v.*;
     }
     report(bench_name, keys.len, nowNs() - start, checksum);
+}
+
+fn benchRandomInsert(comptime name: []const u8, comptime options: zigavl.Options, a: std.mem.Allocator, keys: []const i64) !void {
+    try benchRandomInsertAs(name ++ "/insert/random", options, a, keys);
+}
+
+fn benchCountedInserts(comptime name: []const u8, comptime options: zigavl.Options, a: std.mem.Allocator, keys: []const i64, filter: ?[]const u8) !void {
+    const counted_options = zigavl.Options{
+        .countChildren = true,
+        .nodeCacheType = options.nodeCacheType,
+    };
+    if (shouldRun(filter, name ++ "/insert/counted-sequential")) {
+        try benchSequentialInsertAs(name ++ "/insert/counted-sequential", counted_options, a);
+    }
+    if (shouldRun(filter, name ++ "/insert/counted-random")) {
+        try benchRandomInsertAs(name ++ "/insert/counted-random", counted_options, a, keys);
+    }
 }
 
 fn benchBuildFromSorted(comptime name: []const u8, comptime options: zigavl.Options, a: std.mem.Allocator) !void {
@@ -521,6 +540,7 @@ fn benchOrderedRemoveMaximumAndGet(comptime name: []const u8, comptime options: 
 fn benchTree(comptime name: []const u8, comptime options: zigavl.Options, a: std.mem.Allocator, random_keys: []const i64, filter: ?[]const u8) !void {
     if (shouldRun(filter, name ++ "/insert/sequential")) try benchSequentialInsert(name, options, a);
     if (shouldRun(filter, name ++ "/insert/random")) try benchRandomInsert(name, options, a, random_keys);
+    try benchCountedInserts(name, options, a, random_keys, filter);
     if (shouldRun(filter, name ++ "/buildFromSorted")) try benchBuildFromSorted(name, options, a);
     if (shouldRun(filter, name ++ "/get/random")) try benchRandomGet(name, options, a, random_keys);
     if (shouldRun(filter, name ++ "/delete/random")) try benchRandomDelete(name, options, a, random_keys);

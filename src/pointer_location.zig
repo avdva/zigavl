@@ -9,7 +9,7 @@ fn MakePtrLocationType(comptime K: type, comptime V: type, comptime Tags: type) 
             k: K = undefined,
             v: V = undefined,
             tags: Tags = undefined,
-            h: u8 = 0,
+            balance: i8 = 0,
         };
 
         const Node = struct {
@@ -118,7 +118,7 @@ pub fn LocationCache(comptime K: type, comptime V: type, comptime Tags: type) ty
 
         pub fn meta(_: *Self, loc: Location) cache_contract.Meta(Tags) {
             return .{
-                .height = &loc.ptr.data.h,
+                .balance = &loc.ptr.data.balance,
                 .tags = &loc.ptr.data.tags,
             };
         }

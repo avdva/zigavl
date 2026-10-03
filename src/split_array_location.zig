@@ -37,7 +37,7 @@ pub fn LocationCache(comptime K: type, comptime V: type, comptime Tags: type) ty
         };
 
         const MetaStorage = struct {
-            height: u8 = 0,
+            balance: i8 = 0,
             tags: Tags = undefined,
         };
 
@@ -162,7 +162,7 @@ pub fn LocationCache(comptime K: type, comptime V: type, comptime Tags: type) ty
         pub fn meta(self: *Self, loc: Location) cache_contract.Meta(Tags) {
             const meta_ptr = &self.metas.items[loc.addr];
             return .{
-                .height = &meta_ptr.height,
+                .balance = &meta_ptr.balance,
                 .tags = &meta_ptr.tags,
             };
         }

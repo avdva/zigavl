@@ -13,7 +13,7 @@ pub fn LocationCache(comptime K: type, comptime V: type, comptime Tags: type) ty
             k: K = undefined,
             v: V = undefined,
             tags: Tags = undefined,
-            h: u8 = 0,
+            balance: i8 = 0,
         };
 
         // Location is a compact stable handle into this cache.
@@ -194,7 +194,7 @@ pub fn LocationCache(comptime K: type, comptime V: type, comptime Tags: type) ty
         pub inline fn meta(self: *Self, loc: Location) cache_contract.Meta(Tags) {
             const data_ptr = &self.slot(loc.addr).used.data;
             return .{
-                .height = &data_ptr.h,
+                .balance = &data_ptr.balance,
                 .tags = &data_ptr.tags,
             };
         }
