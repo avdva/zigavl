@@ -2,7 +2,12 @@
 A self-balancing binary [AVL](https://en.wikipedia.org/wiki/AVL_tree) tree written in Zig.
 
 # Presentation
-To use this library, you need at least Zig 0.16.x.
+To use this library, you need at least Zig 0.17.0.
+
+Version `1.4.0` requires Zig 0.17.0 or newer. For Zig 0.16, use `v1.3.0`.
+Node metadata now stores an AVL balance factor instead of a height, reducing work during insertion and deletion.
+Custom cache implementations must expose `Meta.balance: *i8` instead of `Meta.height: *u8`.
+The balance factor is the right subtree height minus the left subtree height; the metadata size is unchanged.
 
 ## Badges
 
@@ -13,7 +18,7 @@ To use this library, you need at least Zig 0.16.x.
 Add zigavl to your `build.zig.zon`:
 
 ```sh
-zig fetch --save git+https://github.com/avdva/zigavl#v1.3.0
+zig fetch --save git+https://github.com/avdva/zigavl#v1.4.0
 ```
 
 Then expose the dependency module in your `build.zig`:

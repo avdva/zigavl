@@ -143,11 +143,11 @@ fn requireErrorUnionMethod(
     comptime ExpectedPayload: type,
 ) void {
     const info = requireFn(Fn, name);
-    if (info.params.len != Params.len) {
+    if (info.param_types.len != Params.len) {
         @compileError("cache." ++ name ++ " has an unexpected parameter count");
     }
     inline for (Params, 0..) |Param, index| {
-        requireParam(info.params, name, index, Param);
+        requireParam(info.param_types, name, index, Param);
     }
     if (info.return_type == null) {
         @compileError("cache." ++ name ++ " must return an error union");
@@ -159,8 +159,8 @@ fn requireErrorUnionMethod(
     }
 }
 
-fn requireParam(comptime params: []const std.builtin.Type.Fn.Param, comptime name: []const u8, comptime index: usize, comptime Expected: type) void {
-    if (params[index].type == null or params[index].type.? != Expected) {
+fn requireParam(comptime params: []const ?type, comptime name: []const u8, comptime index: usize, comptime Expected: type) void {
+    if (params[index] == null or params[index].? != Expected) {
         @compileError("cache." ++ name ++ " has an unexpected parameter type");
     }
 }
@@ -172,11 +172,11 @@ fn requireMethod(
     comptime Return: type,
 ) void {
     const info = requireFn(Fn, name);
-    if (info.params.len != Params.len) {
+    if (info.param_types.len != Params.len) {
         @compileError("cache." ++ name ++ " has an unexpected parameter count");
     }
     inline for (Params, 0..) |Param, index| {
-        requireParam(info.params, name, index, Param);
+        requireParam(info.param_types, name, index, Param);
     }
     if (info.return_type == null or info.return_type.? != Return) {
         @compileError("cache." ++ name ++ " has an unexpected return type");
@@ -190,11 +190,11 @@ fn requireDirMethod(
     comptime Return: type,
 ) void {
     const info = requireFn(Fn, name);
-    if (info.params.len != Params.len) {
+    if (info.param_types.len != Params.len) {
         @compileError("cache." ++ name ++ " has an unexpected parameter count");
     }
     inline for (Params, 0..) |Param, index| {
-        requireParam(info.params, name, index, Param);
+        requireParam(info.param_types, name, index, Param);
     }
     if (info.return_type == null or info.return_type.? != Return) {
         @compileError("cache." ++ name ++ " has an unexpected return type");
