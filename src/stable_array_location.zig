@@ -13,7 +13,6 @@ pub fn LocationCache(comptime K: type, comptime V: type, comptime Tags: type) ty
             k: K = undefined,
             v: V = undefined,
             tags: Tags = undefined,
-            balance: i8 = 0,
         };
 
         // Location is a compact stable handle into this cache.
@@ -36,6 +35,9 @@ pub fn LocationCache(comptime K: type, comptime V: type, comptime Tags: type) ty
             left: Address,
             right: Address,
             parent: Address,
+            // Keep balance beside the links so it can share their padding,
+            // rather than padding the separately aligned key/value payload.
+            balance: i8 = 0,
 
             fn init() Node {
                 return Node{
@@ -194,7 +196,7 @@ pub fn LocationCache(comptime K: type, comptime V: type, comptime Tags: type) ty
         pub inline fn meta(self: *Self, loc: Location) cache_contract.Meta(Tags) {
             const data_ptr = &self.slot(loc.addr).used.data;
             return .{
-                .balance = &data_ptr.balance,
+                .balance = &self.slot(loc.addr).used.balance,
                 .tags = &data_ptr.tags,
             };
         }

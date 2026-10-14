@@ -295,9 +295,8 @@ case measures lookup after `orderStorageByKey()` and excludes pointer storage.
 Hit counts, checksums, and tree length are checked outside timing even in
 ReleaseFast. Existing `get/random` remains the sequentially built baseline.
 
-Small sizes can expose existing tree defects: `updateKey/random` currently
-returns `InvalidBenchmarkResult` at size 4 because an expected source key is
-missing. The new lookup matrix can be run independently with `-Dbench-filter=lookup`.
+See [the array node layout experiment](docs/bench-node-layout.md) for measured
+slot sizes, comparison methodology, and preliminary timing results.
 
 ## Contact
 
