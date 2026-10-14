@@ -790,8 +790,11 @@ fn InitTreeType(comptime K: type, comptime V: type, comptime Cache: type, compti
 
             const old_value = self.valuePtr(old_loc).*;
             self.deleteAndReplace(old_loc);
+            // Deletion may rotate the tree or replace the insertion parent.
+            // Search again rather than using the pre-deletion location.
+            const insertion = self.locate(new_key);
             self.resetDetachedLocation(old_loc, new_key, old_value);
-            self.insertNew(new_res, old_loc);
+            self.insertNew(insertion, old_loc);
             return self.valuePtr(old_loc);
         }
 
@@ -2251,6 +2254,62 @@ test "tree updateKey (pointer cache)" {
 
 test "tree updateKey (array cache)" {
     try testTreeUpdateKey(.{ .countChildren = true, .nodeCacheType = .ArrayBased });
+}
+
+test "tree updateKey relocates after deletion rebalances insertion path" {
+    @setEvalBranchQuota(10_000);
+    inline for (.{ .PointerBased, .ArrayBased, .StableArrayBased, .SplitArrayBased }) |backend| {
+        inline for (.{ false, true }) |count_children| {
+            const T = TreeWithOptions(i64, i64, i64Cmp, .{
+                .nodeCacheType = backend,
+                .countChildren = count_children,
+            });
+            var tree = try T.init(std.testing.allocator);
+            defer tree.deinit();
+            for (0..4) |i| {
+                const key: i64 = @intCast(i);
+                _ = try tree.insert(key, key * 10);
+            }
+
+            const updates = [_]i64{ 1, 2, 0, 3 };
+            const expected_keys = [_][4]i64{
+                .{ 0, 2, 3, 5 }, .{ 0, 3, 5, 6 },
+                .{ 3, 4, 5, 6 }, .{ 4, 5, 6, 7 },
+            };
+            const expected_values = [_][4]i64{
+                .{ 0, 20, 30, 10 }, .{ 0, 30, 10, 20 },
+                .{ 30, 0, 10, 20 }, .{ 0, 10, 20, 30 },
+            };
+            for (updates, 0..) |old_key, step| {
+                const updated = tree.updateKey(old_key, old_key + 4);
+                try std.testing.expect(updated != null);
+                try std.testing.expectEqual(old_key * 10, updated.?.*);
+                try std.testing.expectEqual(@as(usize, 4), tree.len());
+                try std.testing.expectEqual(@as(?*i64, null), tree.get(old_key));
+                for (expected_keys[step], expected_values[step]) |key, value| {
+                    const found = tree.get(key);
+                    try std.testing.expect(found != null);
+                    try std.testing.expectEqual(value, found.?.*);
+                }
+                try std.testing.expectEqual(expected_keys[step][0], tree.getMin().?.Key);
+                try std.testing.expectEqual(expected_keys[step][3], tree.getMax().?.Key);
+                var it = tree.iteratorAtFirst();
+                for (expected_keys[step], expected_values[step], 0..) |key, value, rank| {
+                    const entry = it.value();
+                    try std.testing.expect(entry != null);
+                    try std.testing.expectEqual(key, entry.?.Key);
+                    try std.testing.expectEqual(value, entry.?.Value.*);
+                    if (count_children) {
+                        try std.testing.expectEqual(@as(?usize, rank), tree.rank(key));
+                        try std.testing.expectEqual(key, tree.at(rank).Key);
+                    }
+                    it.next();
+                }
+                try std.testing.expect(it.value() == null);
+                try checkHeightAndBalance(&tree);
+            }
+        }
+    }
 }
 
 test "tree floorRankWithCountChildren" {
