@@ -51,6 +51,9 @@ pub fn build(b: *std.Build) void {
         }),
     });
     const run_bench = b.addRunArtifact(bench);
+    if (b.option([]const u8, "bench-filter", "Benchmark name substring")) |filter| run_bench.addArg(filter);
+    if (b.option(usize, "bench-size", "Benchmark item count (4 to 10000000)")) |size| run_bench.addArgs(&.{ "--size", b.fmt("{d}", .{size}) });
+    if (b.option(usize, "bench-repeat", "Benchmark repetition count")) |repeat| run_bench.addArgs(&.{ "--repeat", b.fmt("{d}", .{repeat}) });
     bench_step.dependOn(&run_bench.step);
 
     const install_bench_step = b.step("install-bench", "Install benchmark executable");

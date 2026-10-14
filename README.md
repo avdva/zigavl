@@ -263,6 +263,42 @@ The suite includes positional lookup benchmarks for the regular `O(logn)`
 count-based path, the `O(1)` ordered-storage path, and the ordered-storage path
 including the one-time `orderStorageByKey()` cost.
 
+Additional lookup workloads cover randomly inserted trees, interleaved missing
+keys, a 50/50 hit/miss mix, lookups after replacing 25% of nodes, and ordered
+storage. They compare all four storage backends with 8-, 64-, and 256-byte
+values, plus fixed-width 32-byte string keys with a shared prefix (8-byte values).
+The timed region includes lookup and reading one value byte; insertion, key
+formatting, mutation, ordering, and validation are outside it. Query order is
+shuffled independently from insertion order with deterministic seeds.
+
+Use `-Dbench-filter` for a substring filter, `-Dbench-size` (4 to 10,000,000;
+default 250,000), and `-Dbench-repeat` (default 1). Size applies to both existing and new benchmarks.
+Each repetition rebuilds the trees and prints its own result; no aggregation
+or warmup samples are hidden. Compare repeated runs rather than one sample.
+
+```sh
+zig build bench -Doptimize=ReleaseFast -Dbench-filter=lookup -Dbench-size=10000 -Dbench-repeat=5
+zig build bench -Doptimize=ReleaseFast -Dbench-filter=lookup -Dbench-size=250000 -Dbench-repeat=5
+zig build bench -Doptimize=ReleaseFast -Dbench-filter=lookup -Dbench-size=1000000 -Dbench-repeat=5
+zig build bench -Doptimize=ReleaseFast -Dbench-filter=split-array/lookup/i64/value256
+zig build bench -Doptimize=ReleaseFast -Dbench-filter=lookup/string32
+```
+
+The executable installed by `zig build install-bench` also accepts a positional
+substring filter, `--size`, and `--repeat` directly.
+
+The `hits` case reads every inserted key once; `misses` queries the adjacent odd
+keys; `mixed` alternates hits and misses in shuffled order. The `churn` case
+removes the first quarter of the shuffled insertion sequence, inserts replacement
+keys above the original range, and then looks up all live keys. The `ordered`
+case measures lookup after `orderStorageByKey()` and excludes pointer storage.
+Hit counts, checksums, and tree length are checked outside timing even in
+ReleaseFast. Existing `get/random` remains the sequentially built baseline.
+
+Small sizes can expose existing tree defects: `updateKey/random` currently
+returns `InvalidBenchmarkResult` at size 4 because an expected source key is
+missing. The new lookup matrix can be run independently with `-Dbench-filter=lookup`.
+
 ## Contact
 
 [Aleksandr Demakin](mailto:alexander.demakin@gmail.com)
