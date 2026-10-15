@@ -1,7 +1,8 @@
 const std = @import("std");
 const zigavl = @import("lib.zig");
 
-const bench_len = 250_000;
+// Set once from CLI before running any benchmark.
+var bench_len: usize = 250_000;
 const posix = std.posix;
 
 fn i64Cmp(a: i64, b: i64) std.math.Order {
@@ -36,6 +37,7 @@ fn shouldRun(filter: ?[]const u8, name: []const u8) bool {
 const CliArgs = struct {
     filter: ?[]const u8 = null,
     repeat: usize = 1,
+    size: usize = 250_000,
 };
 
 fn parseArgs(args: []const [:0]const u8) !CliArgs {
@@ -50,6 +52,12 @@ fn parseArgs(args: []const [:0]const u8) !CliArgs {
             parsed.repeat = try std.fmt.parseInt(usize, args[idx], 10);
         } else if (std.mem.startsWith(u8, arg, "--repeat=")) {
             parsed.repeat = try std.fmt.parseInt(usize, arg["--repeat=".len..], 10);
+        } else if (std.mem.eql(u8, arg, "--size")) {
+            idx += 1;
+            if (idx == args.len) return error.MissingSizeValue;
+            parsed.size = try std.fmt.parseInt(usize, args[idx], 10);
+        } else if (std.mem.startsWith(u8, arg, "--size=")) {
+            parsed.size = try std.fmt.parseInt(usize, arg["--size=".len..], 10);
         } else if (std.mem.startsWith(u8, arg, "-")) {
             return error.UnknownArgument;
         } else {
@@ -59,6 +67,7 @@ fn parseArgs(args: []const [:0]const u8) !CliArgs {
     }
 
     if (parsed.repeat == 0) return error.InvalidRepeat;
+    if (parsed.size < 4 or parsed.size > 10_000_000) return error.InvalidSize;
     return parsed;
 }
 
@@ -205,7 +214,8 @@ fn benchRandomUpdateKey(comptime name: []const u8, comptime options: zigavl.Opti
     var checksum: i64 = 0;
     const start = nowNs();
     for (keys) |key| {
-        checksum += tree.updateKey(key, key + offset).?.*;
+        const value = tree.updateKey(key, key + offset) orelse return error.InvalidBenchmarkResult;
+        checksum += value.*;
     }
     report(bench_name, keys.len, nowNs() - start, checksum);
 }
@@ -270,7 +280,8 @@ fn benchMixedUpdateKey(comptime name: []const u8, comptime options: zigavl.Optio
     const start = nowNs();
     for (op_ids) |op_id| {
         const keys = mixedUpdateKeys(group_count, @intCast(op_id));
-        checksum += tree.updateKey(keys.old_key, keys.new_key).?.*;
+        const value = tree.updateKey(keys.old_key, keys.new_key) orelse return error.InvalidBenchmarkResult;
+        checksum += value.*;
     }
     report(bench_name, op_count, nowNs() - start, checksum);
 }
@@ -537,7 +548,119 @@ fn benchOrderedRemoveMaximumAndGet(comptime name: []const u8, comptime options: 
     report(bench_name, keys.len, nowNs() - start, checksum);
 }
 
+// Fixed-width strings share a prefix so comparison must inspect more than
+// the first byte. All key formatting happens before the measured lookup loop.
+fn stringCmp(a: [32]u8, b: [32]u8) std.math.Order {
+    return std.mem.order(u8, &a, &b);
+}
+
+fn workloadKey(comptime strings: bool, id: i64) if (strings) [32]u8 else i64 {
+    if (!strings) return id;
+    var key: [32]u8 = undefined;
+    _ = std.fmt.bufPrint(&key, "key-prefix-00000{x:0>16}", .{@as(u64, @intCast(id))}) catch unreachable;
+    return key;
+}
+
+const LookupWorkload = enum { hits, misses, mixed, churn, ordered };
+
+fn benchLookupWorkload(
+    comptime name: []const u8,
+    comptime options: zigavl.Options,
+    comptime strings: bool,
+    comptime value_size: usize,
+    comptime workload: LookupWorkload,
+    a: std.mem.Allocator,
+    insertion_ids: []const i64,
+) !void {
+    const K = if (strings) [32]u8 else i64;
+    const V = [value_size]u8;
+    const Tree = zigavl.TreeWithOptions(K, V, if (strings) stringCmp else i64Cmp, options);
+    var tree = try Tree.init(a);
+    defer tree.deinit();
+
+    // Even keys are present; odd keys are interleaved misses rather than
+    // queries entirely outside the tree's range.
+    for (insertion_ids) |id| {
+        _ = try tree.insert(workloadKey(strings, id * 2), @splat(@as(u8, @intCast(@mod(id, 251)))));
+    }
+    const replaced_count = insertion_ids.len / 4;
+    if (workload == .churn) {
+        for (insertion_ids[0..replaced_count]) |id| {
+            const value = tree.delete(workloadKey(strings, id * 2)) orelse return error.InvalidBenchmarkResult;
+            _ = try tree.insert(workloadKey(strings, (id + @as(i64, @intCast(insertion_ids.len))) * 2), value);
+        }
+    }
+    if (workload == .ordered) tree.orderStorageByKey();
+
+    const queries = try a.alloc(K, insertion_ids.len);
+    defer a.free(queries);
+    const query_ids = try a.dupe(i64, insertion_ids);
+    defer a.free(query_ids);
+    // Independent order avoids replaying the insertion traversal.
+    var prng = std.Random.DefaultPrng.init(1);
+    prng.random().shuffle(i64, query_ids);
+    const replaced = try a.alloc(bool, insertion_ids.len);
+    defer a.free(replaced);
+    @memset(replaced, false);
+    if (workload == .churn) {
+        for (insertion_ids[0..replaced_count]) |id| replaced[@intCast(id)] = true;
+    }
+    var expected_checksum: i64 = 0;
+    var expected_hits: usize = 0;
+    for (query_ids, 0..) |id, i| {
+        const miss = workload == .misses or (workload == .mixed and i % 2 == 1);
+        const stored_id = if (workload == .churn and replaced[@intCast(id)])
+            id + @as(i64, @intCast(insertion_ids.len))
+        else
+            id;
+        queries[i] = workloadKey(strings, stored_id * 2 + @as(i64, @intFromBool(miss)));
+        if (!miss) {
+            expected_hits += 1;
+            expected_checksum += @mod(id, 251);
+        }
+    }
+
+    var checksum: i64 = 0;
+    var hits: usize = 0;
+    const start = nowNs();
+    for (queries) |key| {
+        if (tree.get(key)) |value| {
+            checksum += value[0];
+            hits += 1;
+        }
+    }
+    const elapsed = nowNs() - start;
+    // Validate outside the timed region, including misses in ReleaseFast.
+    if (hits != expected_hits or checksum != expected_checksum or tree.len() != insertion_ids.len)
+        return error.InvalidBenchmarkResult;
+    report(name, queries.len, elapsed, checksum);
+}
+
+fn benchLookupMatrix(comptime backend: []const u8, comptime options: zigavl.Options, a: std.mem.Allocator, ids: []const i64, filter: ?[]const u8) !void {
+    inline for (.{ false, true }) |strings| {
+        inline for (.{ 8, 64, 256 }) |value_size| {
+            // One string-key payload isolates comparator cost from value size.
+            if (!strings or value_size == 8) {
+                inline for (comptime std.meta.tags(LookupWorkload)) |workload| {
+                    if (workload != .ordered or options.nodeCacheType != .PointerBased) {
+                        const name = comptime backend ++ "/lookup/" ++
+                            (if (strings) "string32" else "i64") ++ "/value" ++
+                            (switch (value_size) {
+                                8 => "8",
+                                64 => "64",
+                                256 => "256",
+                                else => unreachable,
+                            }) ++ "/" ++ @tagName(workload);
+                        if (shouldRun(filter, name)) try benchLookupWorkload(name, options, strings, value_size, workload, a, ids);
+                    }
+                }
+            }
+        }
+    }
+}
+
 fn benchTree(comptime name: []const u8, comptime options: zigavl.Options, a: std.mem.Allocator, random_keys: []const i64, filter: ?[]const u8) !void {
+    try benchLookupMatrix(name, options, a, random_keys, filter);
     if (shouldRun(filter, name ++ "/insert/sequential")) try benchSequentialInsert(name, options, a);
     if (shouldRun(filter, name ++ "/insert/random")) try benchRandomInsert(name, options, a, random_keys);
     try benchCountedInserts(name, options, a, random_keys, filter);
@@ -587,6 +710,7 @@ pub fn main(init: std.process.Init) !void {
     const a = std.heap.smp_allocator;
     const args = try init.minimal.args.toSlice(init.arena.allocator());
     const parsed = try parseArgs(args);
+    bench_len = parsed.size;
 
     const random_keys = try makeKeys(a, bench_len, true);
     defer a.free(random_keys);
