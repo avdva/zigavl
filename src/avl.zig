@@ -1011,10 +1011,21 @@ fn InitTreeType(comptime K: type, comptime V: type, comptime Cache: type, compti
                     return self.getInOrderedStorage(k);
                 }
             }
-            const res = self.locate(k);
-            if (res.dir == .center) {
-                if (res.loc) |loc| {
-                    return self.valuePtr(loc);
+            // Direct descent benefits address-backed storage. Keep the existing
+            // locate path for pointer-backed trees (see docs/bench-direct-get.md).
+            if (options.nodeCacheType == .PointerBased) {
+                const res = self.locate(k);
+                if (res.dir == .center) {
+                    if (res.loc) |loc| return self.valuePtr(loc);
+                }
+                return null;
+            }
+            var current = self.root;
+            while (current) |loc| {
+                switch (Comparer(k, self.keyPtr(loc).*)) {
+                    .lt => current = self.child(loc, .left),
+                    .eq => return self.valuePtr(loc),
+                    .gt => current = self.child(loc, .right),
                 }
             }
             return null;
@@ -2309,6 +2320,47 @@ test "tree updateKey relocates after deletion rebalances insertion path" {
                 try checkHeightAndBalance(&tree);
             }
         }
+    }
+}
+
+fn testDirectGet(comptime options: Options, comptime compare: fn (i64, i64) math.Order) !void {
+    const T = TreeWithOptions(i64, i64, compare, options);
+    var tree = try T.init(std.testing.allocator);
+    defer tree.deinit();
+    try std.testing.expect(tree.get(0) == null);
+    const keys = [_]i64{ std.math.minInt(i64), std.math.maxInt(i64), -3, 0, 7, 24 };
+    for (keys, 0..) |key, i| _ = try tree.insert(key, @as(i64, @intCast(i)) + 100);
+    tree.get(7).?.* = 999;
+    for ([_]bool{ false, true }) |ordered| {
+        if (ordered) tree.orderStorageByKey();
+        for (keys, 0..) |key, i| {
+            const value = tree.get(key);
+            try std.testing.expect(value != null);
+            const expected: i64 = if (key == 7) 999 else @as(i64, @intCast(i)) + 100;
+            try std.testing.expectEqual(expected, value.?.*);
+        }
+        for ([_]i64{ -4, -1, 1, 8, 25 }) |missing| try std.testing.expect(tree.get(missing) == null);
+    }
+    try std.testing.expectEqual(@as(?i64, 103), tree.delete(0));
+    _ = try tree.insert(3, 333);
+    try std.testing.expect(tree.get(0) == null);
+    try std.testing.expectEqual(@as(i64, 333), tree.get(3).?.*);
+    try std.testing.expectEqual(@as(i64, 999), tree.get(7).?.*);
+    try std.testing.expectEqual(@as(i64, 100), tree.get(std.math.minInt(i64)).?.*);
+    try std.testing.expectEqual(@as(i64, 101), tree.get(std.math.maxInt(i64)).?.*);
+    try std.testing.expectEqual(@as(usize, keys.len), tree.len());
+    try checkHeightAndBalance(&tree);
+}
+
+test "tree get handles misses, extreme keys and reverse order across storage layouts" {
+    const Reverse = struct {
+        fn compare(a: i64, b: i64) math.Order {
+            return math.order(b, a);
+        }
+    };
+    inline for (.{ .PointerBased, .ArrayBased, .StableArrayBased, .SplitArrayBased }) |backend| {
+        try testDirectGet(.{ .nodeCacheType = backend }, i64Cmp);
+        try testDirectGet(.{ .nodeCacheType = backend }, Reverse.compare);
     }
 }
 
