@@ -85,3 +85,9 @@ slot sizes, comparison methodology, and preliminary timing results.
 The suite currently uses a fixed allocator and fixed key/payload families.
 For application decisions, add representative distributions, comparator costs,
 mutation rates, and lifetimes rather than extrapolating from integer keys alone.
+
+See the [direct get experiment](bench-direct-get.md) for a shared-traversal
+lookup comparison, generated-code inspection, and measurements with fixed CPU
+affinity. On hybrid CPUs, pin before/after processes to the same logical CPU
+(e.g. with `taskset` on Linux) and record the chosen core alongside the power
+profile. A performance power profile alone does not fix CPU affinity.
