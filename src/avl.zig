@@ -1011,15 +1011,6 @@ fn InitTreeType(comptime K: type, comptime V: type, comptime Cache: type, compti
                     return self.getInOrderedStorage(k);
                 }
             }
-            // Direct descent benefits address-backed storage. Keep the existing
-            // locate path for pointer-backed trees (see docs/bench-direct-get.md).
-            if (options.nodeCacheType == .PointerBased) {
-                const res = self.locate(k);
-                if (res.dir == .center) {
-                    if (res.loc) |loc| return self.valuePtr(loc);
-                }
-                return null;
-            }
             var current = self.root;
             while (current) |loc| {
                 switch (Comparer(k, self.keyPtr(loc).*)) {
