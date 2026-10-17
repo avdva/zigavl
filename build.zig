@@ -40,6 +40,17 @@ pub fn build(b: *std.Build) void {
     const run_consumer_tests = b.addRunArtifact(consumer_tests);
     test_step.dependOn(&run_consumer_tests.step);
 
+    const unsupported_reserve = b.addTest(.{
+        .root_module = b.createModule(.{
+            .root_source_file = b.path("src/ensure_capacity_compile_error.zig"),
+            .target = target,
+            .optimize = optimize,
+        }),
+    });
+    unsupported_reserve.root_module.addImport("zigavl", zigavl_mod);
+    unsupported_reserve.expect_errors = .{ .contains = "ensureCapacity is not supported by this storage backend" };
+    test_step.dependOn(&unsupported_reserve.step);
+
     const bench_step = b.step("bench", "Run basic benchmarks");
     const bench = b.addExecutable(.{
         .name = "zigavl-bench",

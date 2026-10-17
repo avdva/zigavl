@@ -267,6 +267,7 @@ pub fn assertBaseRequirements(comptime Cache: type, comptime K: type, comptime V
 // Capabilities is computed from a concrete cache implementation and describes
 // optional cache operations that the tree can use when they are available.
 pub const Capabilities = struct {
+    hasReserveNodes: bool,
     hasFastClear: bool,
     hasCompactStorage: bool,
     hasOrderedStorage: bool,
@@ -274,7 +275,12 @@ pub const Capabilities = struct {
 
 pub fn getCapabilities(comptime Cache: type) Capabilities {
     const has_indexed_storage = @hasDecl(Cache, "locationAt");
+    const has_reserve_nodes = @hasDecl(Cache, "reserveNodes");
+    if (has_reserve_nodes) {
+        requireErrorUnionMethod(@TypeOf(Cache.reserveNodes), "reserveNodes", &.{ *Cache, usize }, void);
+    }
     return .{
+        .hasReserveNodes = has_reserve_nodes,
         .hasFastClear = @hasDecl(Cache, "clearAll"),
         .hasCompactStorage = @hasDecl(Cache, "reclaim"),
         .hasOrderedStorage = @hasDecl(Cache, "relocate") and

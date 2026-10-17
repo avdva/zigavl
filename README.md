@@ -96,6 +96,7 @@ pub fn lowerBound(self: *Self, k: K) Iterator
 pub fn upperBound(self: *Self, k: K) Iterator
 
 // storage-specific:
+pub fn ensureCapacity(self: *Self, capacity: usize) !void // Address-based backends only.
 pub fn compactStorage(self: *Self) void
 pub fn orderStorageByKey(self: *Self) void
 
