@@ -84,6 +84,40 @@ The count representation supports at most `maxInt(u32) + 1` elements; the
 address-based caches have their own 32-bit slot limit with a reserved invalid
 address. Retained free slots consume that address space too.
 
+## Reserving capacity
+
+`try tree.ensureCapacity(n)` reserves node storage for at least `n` live
+elements in ArrayBased, StableArrayBased, and SplitArrayBased. This is a total
+element count, not a count of additional insertions. Existing free slots count
+toward the reservation. Smaller or repeated requests do not shrink storage;
+keys, values, length, and ordered-storage state remain unchanged.
+
+```zig
+var tree = try TreeType.init(allocator);
+defer tree.deinit();
+try tree.ensureCapacity(100_000);
+```
+
+After success, insertion up to that live count needs no further node-storage
+allocations, including when deleted slots are reused. Constructors supplied to
+`getOrEmplace` may still allocate themselves. `clear`, `compactStorage`,
+`orderStorageByKey`, and `buildFromSorted` may discard reserved capacity; reserve
+again afterward if needed.
+
+Growth can invalidate value pointers for ArrayBased and SplitArrayBased, even
+if a later allocation fails. StableArrayBased keeps existing value pointers.
+An allocation failure returns `error.OutOfMemory` and preserves tree contents,
+but some storage may already have grown. Requests beyond the backend's 32-bit
+slot limit also return `error.OutOfMemory`.
+
+PointerBased allocates each node separately and cannot provide this guarantee.
+Calling `ensureCapacity` on it produces a compile error; other operations remain
+available. Internally, `cache.getCapabilities(Cache).hasReserveNodes` checks
+support for the concrete cache type. The optional cache method
+`reserveNodes(self: *Cache, count: usize) !void` must reserve for `count` further
+node creations, including reusable free slots; the tree converts total capacity
+to this additional count.
+
 ## Bulk loading and read-heavy phases
 
 `buildFromSorted(items)` replaces the contents from strictly sorted, unique

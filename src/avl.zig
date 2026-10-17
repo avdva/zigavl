@@ -576,6 +576,19 @@ fn InitTreeType(comptime K: type, comptime V: type, comptime Cache: type, compti
             self.storage_ordered = true;
         }
 
+        /// Reserves node storage for at least capacity live elements, reusing
+        /// free slots. Does not shrink storage or change tree contents/order.
+        /// ArrayBased/SplitArrayBased growth may invalidate value pointers,
+        /// including on allocation failure. StableArrayBased preserves them.
+        /// Calling this method on an unsupported backend is a compile error.
+        pub fn ensureCapacity(self: *Self, capacity: usize) !void {
+            if (comptime !cacheCapabilities.hasReserveNodes) {
+                @compileError("ensureCapacity is not supported by this storage backend");
+            } else {
+                try self.lc.reserveNodes(capacity -| self.len());
+            }
+        }
+
         // len returns the number of elements.
         pub fn len(self: *const Self) usize {
             return self.length;
@@ -1823,6 +1836,91 @@ fn testTreeBuildFromSorted(comptime options: Options) !void {
     try testTreeBuildFromSortedWithItems(TreeType, &t, &[_]TreeType.KV{
         .{ .Key = 0, .Value = 0 },
     }, shouldBeOrdered);
+}
+
+fn testTreeEnsureCapacity(comptime options: Options) !void {
+    var allocator = std.testing.FailingAllocator.init(std.testing.allocator, .{});
+    const TreeType = TreeWithOptions(i64, i64, i64Cmp, options);
+    var tree = try TreeType.init(allocator.allocator());
+    defer tree.deinit();
+
+    try tree.ensureCapacity(0);
+    try tree.ensureCapacity(1200);
+    allocator.fail_index = allocator.alloc_index;
+    allocator.resize_fail_index = allocator.resize_index;
+    for (0..1200) |i| {
+        const key: i64 = @intCast(i);
+        _ = try tree.insert(key, key * 10);
+    }
+    try std.testing.expect(!allocator.has_induced_failure);
+
+    tree.orderStorageByKey();
+    const stable_value = tree.get(900).?;
+    allocator.fail_index = std.math.maxInt(usize);
+    allocator.resize_fail_index = std.math.maxInt(usize);
+    try tree.ensureCapacity(1500);
+    try std.testing.expect(tree.storage_ordered);
+    if (options.nodeCacheType == .StableArrayBased) {
+        try std.testing.expectEqual(stable_value, tree.get(900).?);
+    }
+    for (0..600) |i| {
+        const key: i64 = @intCast(i);
+        try std.testing.expectEqual(key * 10, tree.delete(key).?);
+    }
+
+    allocator.fail_index = allocator.alloc_index;
+    allocator.resize_fail_index = allocator.resize_index;
+    // Total capacity, rather than len + requested capacity; reuse freed slots.
+    try tree.ensureCapacity(1500);
+    try tree.ensureCapacity(1500);
+    try tree.ensureCapacity(0);
+    try tree.ensureCapacity(tree.len());
+    try tree.ensureCapacity(tree.len() - 1);
+    for (1200..2100) |i| {
+        const key: i64 = @intCast(i);
+        _ = try tree.insert(key, key * 10);
+    }
+    try std.testing.expectEqual(@as(usize, 1500), tree.len());
+    for (600..2100) |i| {
+        const key: i64 = @intCast(i);
+        try std.testing.expectEqual(key * 10, tree.get(key).?.*);
+    }
+    try std.testing.expect(!allocator.has_induced_failure);
+    try std.testing.expectError(error.OutOfMemory, tree.ensureCapacity(std.math.maxInt(usize)));
+    try std.testing.expectEqual(@as(usize, 1500), tree.len());
+}
+
+test "tree ensureCapacity reserves total live count across indexed backends and options" {
+    inline for (.{ .ArrayBased, .StableArrayBased, .SplitArrayBased }) |backend| {
+        inline for (.{ false, true }) |count_children| {
+            try testTreeEnsureCapacity(.{ .nodeCacheType = backend, .countChildren = count_children });
+        }
+    }
+}
+
+test "tree ensureCapacity preserves contents on allocation failure and can retry" {
+    inline for (.{ .ArrayBased, .StableArrayBased, .SplitArrayBased }) |backend| {
+        // Cover failures after some arrays/chunks have already grown, too.
+        for (0..6) |successful_allocations| {
+            var allocator = std.testing.FailingAllocator.init(std.testing.allocator, .{});
+            const TreeType = TreeWithOptions(i64, i64, i64Cmp, .{ .nodeCacheType = backend });
+            var tree = try TreeType.init(allocator.allocator());
+            defer tree.deinit();
+            _ = try tree.insert(7, 70);
+            allocator.fail_index = allocator.alloc_index + successful_allocations;
+            allocator.resize_fail_index = allocator.resize_index;
+            tree.ensureCapacity(12000) catch |err| {
+                try std.testing.expectEqual(error.OutOfMemory, err);
+            };
+            try std.testing.expectEqual(@as(usize, 1), tree.len());
+            try std.testing.expectEqual(@as(i64, 70), tree.get(7).?.*);
+            allocator.fail_index = std.math.maxInt(usize);
+            allocator.resize_fail_index = std.math.maxInt(usize);
+            try tree.ensureCapacity(12000);
+            _ = try tree.insert(8, 80);
+            try std.testing.expectEqual(@as(i64, 80), tree.get(8).?.*);
+        }
+    }
 }
 
 test "tree buildFromSorted across options" {
