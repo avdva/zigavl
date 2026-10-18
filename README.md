@@ -3,7 +3,9 @@ A self-balancing binary [AVL](https://en.wikipedia.org/wiki/AVL_tree) tree writt
 
 # Presentation
 
-Version `1.4.0` requires Zig 0.17.0 or newer. For Zig 0.16, use `v1.3.0`.
+Version `1.5.0` requires Zig 0.17.0 or newer. For Zig 0.16, use `v1.3.0`.
+
+See the [1.5.0 release notes](docs/releases/1.5.0.md) for changes since 1.4.0.
 
 ## Badges
 
@@ -14,7 +16,7 @@ Version `1.4.0` requires Zig 0.17.0 or newer. For Zig 0.16, use `v1.3.0`.
 Add `zigavl` to your `build.zig.zon`:
 
 ```sh
-zig fetch --save git+https://github.com/avdva/zigavl#v1.4.0
+zig fetch --save git+https://github.com/avdva/zigavl#v1.5.0
 ```
 
 Then expose the dependency module in your `build.zig`:
