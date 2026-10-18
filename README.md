@@ -222,6 +222,25 @@ pub fn main() !void {
 
 ```
 
+To reserve storage before inserting, select an address-based backend. For
+example, inside a function using the imports and comparator above:
+
+```zig
+const ReservedTree = zigavl.TreeWithOptions(i64, i64, i64Cmp, .{
+    .nodeCacheType = .ArrayBased,
+});
+var reserved = try ReservedTree.init(std.heap.page_allocator);
+defer reserved.deinit();
+
+try reserved.ensureCapacity(1_000);
+_ = try reserved.insert(42, 420);
+```
+
+`1_000` is the total live element capacity, including existing elements and
+reusable free slots. Smaller requests do not shrink storage. PointerBased does
+not support this method; see [capacity guarantees](docs/caches.md#reserving-capacity)
+for pointer lifetimes and operations that can discard the reservation.
+
 ## Benchmarks
 
 See the [benchmark guide](docs/benchmarks.md) for commands, workload definitions,
