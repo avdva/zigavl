@@ -3,7 +3,9 @@ A self-balancing binary [AVL](https://en.wikipedia.org/wiki/AVL_tree) tree writt
 
 # Presentation
 
-Version `1.4.0` requires Zig 0.17.0 or newer. For Zig 0.16, use `v1.3.0`.
+Version `1.5.0` requires Zig 0.17.0 or newer. For Zig 0.16, use `v1.3.0`.
+
+See the [1.5.0 release notes](docs/releases/1.5.0.md) for changes since 1.4.0.
 
 ## Badges
 
@@ -14,7 +16,7 @@ Version `1.4.0` requires Zig 0.17.0 or newer. For Zig 0.16, use `v1.3.0`.
 Add `zigavl` to your `build.zig.zon`:
 
 ```sh
-zig fetch --save git+https://github.com/avdva/zigavl#v1.4.0
+zig fetch --save git+https://github.com/avdva/zigavl#v1.5.0
 ```
 
 Then expose the dependency module in your `build.zig`:
@@ -219,6 +221,25 @@ pub fn main() !void {
 }
 
 ```
+
+To reserve storage before inserting, select an address-based backend. For
+example, inside a function using the imports and comparator above:
+
+```zig
+const ReservedTree = zigavl.TreeWithOptions(i64, i64, i64Cmp, .{
+    .nodeCacheType = .ArrayBased,
+});
+var reserved = try ReservedTree.init(std.heap.page_allocator);
+defer reserved.deinit();
+
+try reserved.ensureCapacity(1_000);
+_ = try reserved.insert(42, 420);
+```
+
+`1_000` is the total live element capacity, including existing elements and
+reusable free slots. Smaller requests do not shrink storage. PointerBased does
+not support this method; see [capacity guarantees](docs/caches.md#reserving-capacity)
+for pointer lifetimes and operations that can discard the reservation.
 
 ## Benchmarks
 
