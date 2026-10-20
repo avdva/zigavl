@@ -659,7 +659,68 @@ fn benchLookupMatrix(comptime backend: []const u8, comptime options: zigavl.Opti
     }
 }
 
+const InsertWorkload = enum { ascending, descending, random, existing };
+
+fn benchInsertionWorkload(
+    comptime options: zigavl.Options,
+    comptime strings: bool,
+    name: []const u8,
+    workload: InsertWorkload,
+    a: std.mem.Allocator,
+    random_ids: []const i64,
+) !void {
+    const K = if (strings) [32]u8 else i64;
+    const Tree = zigavl.TreeWithOptions(K, i64, if (strings) stringCmp else i64Cmp, options);
+    const keys = try a.alloc(K, random_ids.len);
+    defer a.free(keys);
+    for (keys, 0..) |*key, i| {
+        const id = switch (workload) {
+            .ascending => @as(i64, @intCast(i)),
+            .descending => @as(i64, @intCast(keys.len - i - 1)),
+            .random, .existing => random_ids[i],
+        };
+        key.* = workloadKey(strings, id);
+    }
+    var tree = try Tree.init(a);
+    defer tree.deinit();
+    if (workload == .existing) {
+        for (keys) |key| _ = try tree.insert(key, -1);
+    }
+    var checksum: i64 = 0;
+    var inserted: usize = 0;
+    const start = nowNs();
+    for (keys, 0..) |key, i| {
+        const result = try tree.insert(key, @intCast(i));
+        checksum += result.v.*;
+        inserted += @intFromBool(result.inserted);
+    }
+    const elapsed = nowNs() - start;
+    const n: i64 = @intCast(keys.len);
+    if (tree.len() != keys.len or checksum != @divExact(n * (n - 1), 2) or
+        inserted != (if (workload == .existing) @as(usize, 0) else keys.len))
+        return error.InvalidBenchmarkResult;
+    for (keys, 0..) |key, i| {
+        const value = tree.get(key) orelse return error.InvalidBenchmarkResult;
+        if (value.* != @as(i64, @intCast(i))) return error.InvalidBenchmarkResult;
+    }
+    report(name, keys.len, elapsed, checksum);
+}
+
+fn benchInsertionMatrix(comptime backend: []const u8, comptime options: zigavl.Options, a: std.mem.Allocator, ids: []const i64, filter: ?[]const u8) !void {
+    inline for (.{ false, true }) |strings| {
+        inline for (.{ false, true }) |counted| {
+            const configured = zigavl.Options{ .nodeCacheType = options.nodeCacheType, .countChildren = counted };
+            inline for (comptime std.meta.tags(InsertWorkload)) |workload| {
+                const name = backend ++ "/insert-matrix/" ++ (if (strings) "string32/" else "i64/") ++
+                    (if (counted) "counted/" else "uncounted/") ++ @tagName(workload);
+                if (shouldRun(filter, name)) try benchInsertionWorkload(configured, strings, name, workload, a, ids);
+            }
+        }
+    }
+}
+
 fn benchTree(comptime name: []const u8, comptime options: zigavl.Options, a: std.mem.Allocator, random_keys: []const i64, filter: ?[]const u8) !void {
+    try benchInsertionMatrix(name, options, a, random_keys, filter);
     try benchLookupMatrix(name, options, a, random_keys, filter);
     if (shouldRun(filter, name ++ "/insert/sequential")) try benchSequentialInsert(name, options, a);
     if (shouldRun(filter, name ++ "/insert/random")) try benchRandomInsert(name, options, a, random_keys);

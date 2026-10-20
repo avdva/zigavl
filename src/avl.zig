@@ -374,6 +374,7 @@ fn InitTreeType(comptime K: type, comptime V: type, comptime Cache: type, compti
         min: ?Location,
         max: ?Location,
         storage_ordered: bool,
+        insertion_edge: direction = .center,
 
         // init initializes the tree with default options.
         pub fn init(a: std.mem.Allocator) !Self {
@@ -411,6 +412,7 @@ fn InitTreeType(comptime K: type, comptime V: type, comptime Cache: type, compti
             self.min = null;
             self.max = null;
             self.storage_ordered = false;
+            self.insertion_edge = .center;
         }
 
         // deinit releases the memory taken by all the nodes.
@@ -638,7 +640,7 @@ fn InitTreeType(comptime K: type, comptime V: type, comptime Cache: type, compti
         //  - otherwise calls ctor with given args to initialise a newly created value.
         // Time complexity: O(logn).
         pub fn getOrEmplace(self: *Self, k: K, ctor: fn (v: *V, args: anytype) void, args: anytype) !InsertResult {
-            const res = self.locate(k);
+            const res = self.locateForInsert(k);
             if (res.loc) |l| {
                 if (res.dir == .center) {
                     return InsertResult{
@@ -670,7 +672,7 @@ fn InitTreeType(comptime K: type, comptime V: type, comptime Cache: type, compti
         }
 
         fn doInsert(self: *Self, k: K, v: V, updateExisting: bool) !InsertResult {
-            const res = self.locate(k);
+            const res = self.locateForInsert(k);
             if (res.loc) |l| {
                 if (res.dir == .center) {
                     if (updateExisting) {
@@ -719,14 +721,17 @@ fn InitTreeType(comptime K: type, comptime V: type, comptime Cache: type, compti
                 self.storage_ordered = keeps_storage_ordered;
             }
             self.length += 1;
+            self.insertion_edge = .center;
             switch (where.dir) {
                 .left, .right => {
                     const l = where.loc orelse unreachable;
                     self.reparent(l, where.dir, new_loc);
                     if (where.dir == .left and self.locEq(l, self.min.?)) {
                         self.min = new_loc;
+                        self.insertion_edge = .left;
                     } else if (where.dir == .right and self.locEq(l, self.max.?)) {
                         self.max = new_loc;
+                        self.insertion_edge = .right;
                     }
                     self.rebalanceAfterInsert(l, new_loc);
                 },
@@ -1668,6 +1673,35 @@ fn InitTreeType(comptime K: type, comptime V: type, comptime Cache: type, compti
             return right;
         }
 
+        // After extending an edge, try the same edge on the next insertion.
+        // Stop probing after a miss so random keys do not pay extra comparisons
+        // on every insertion. The hint stores only a direction, not a location.
+        fn locateForInsert(self: *Self, k: K) LocateResult {
+            switch (self.insertion_edge) {
+                .left => {
+                    if (self.min) |minimum| {
+                        switch (Comparer(k, self.keyPtr(minimum).*)) {
+                            .lt => return .{ .loc = minimum, .dir = .left },
+                            .eq => return .{ .loc = minimum, .dir = .center },
+                            .gt => {},
+                        }
+                    }
+                },
+                .right => {
+                    if (self.max) |maximum| {
+                        switch (Comparer(k, self.keyPtr(maximum).*)) {
+                            .gt => return .{ .loc = maximum, .dir = .right },
+                            .eq => return .{ .loc = maximum, .dir = .center },
+                            .lt => {},
+                        }
+                    }
+                },
+                .center => {},
+            }
+            self.insertion_edge = .center;
+            return self.locate(k);
+        }
+
         fn locate(self: *Self, k: K) LocateResult {
             var result = LocateResult{
                 .loc = self.root,
@@ -2176,6 +2210,102 @@ test "tree ordered storage survives tail mutations" {
     try testTreeOrderedStorageTailMutations(.{ .countChildren = true, .nodeCacheType = .StableArrayBased });
     try testTreeOrderedStorageTailMutations(.{ .countChildren = false, .nodeCacheType = .SplitArrayBased });
     try testTreeOrderedStorageTailMutations(.{ .countChildren = true, .nodeCacheType = .SplitArrayBased });
+}
+
+fn testExtremeKeyInsertion(comptime options: Options, comptime compare: fn (i64, i64) math.Order) !void {
+    const T = TreeWithOptions(i64, i64, compare, options);
+    var tree = try T.init(std.testing.allocator);
+    defer tree.deinit();
+    const Constructor = struct {
+        fn run(value: *i64, args: anytype) void {
+            args.calls.* += 1;
+            value.* = args.value;
+        }
+    };
+    var calls: usize = 0;
+    for (0..3) |pattern| {
+        tree.clearRetainingCapacity();
+        for (0..64) |i| {
+            const key: i64 = switch (pattern) {
+                0 => @intCast(i),
+                1 => @intCast(63 - i),
+                else => if (i % 2 == 0) @intCast(i / 2) else -@as(i64, @intCast((i + 1) / 2)),
+            };
+            const before = calls;
+            const inserted = switch (i % 3) {
+                0 => try tree.insert(key, key * 10),
+                1 => try tree.getOrInsert(key, key * 10),
+                else => try tree.getOrEmplace(key, Constructor.run, .{ .calls = &calls, .value = key * 10 }),
+            };
+            try std.testing.expect(inserted.inserted);
+            try std.testing.expectEqual(key * 10, inserted.v.*);
+            try std.testing.expectEqual(before + @intFromBool(i % 3 == 2), calls);
+            try checkHeightAndBalance(&tree);
+        }
+        // Cover duplicates at both cached edges and inside the tree.
+        for ([_]i64{ tree.getMin().?.Key, tree.getMax().?.Key, 0, 16 }) |key| {
+            const before = calls;
+            const emplaced = try tree.getOrEmplace(key, Constructor.run, .{ .calls = &calls, .value = @as(i64, 999) });
+            try std.testing.expect(!emplaced.inserted);
+            try std.testing.expectEqual(before, calls);
+            try std.testing.expectEqual(key * 10, emplaced.v.*);
+            const unchanged = try tree.getOrInsert(key, 999);
+            try std.testing.expect(!unchanged.inserted);
+            try std.testing.expectEqual(key * 10, unchanged.v.*);
+            const updated = try tree.insert(key, 999);
+            try std.testing.expect(!updated.inserted);
+            try std.testing.expectEqual(@as(i64, 999), updated.v.*);
+            _ = try tree.insert(key, key * 10);
+        }
+        _ = tree.delete(tree.getMin().?.Key);
+        _ = tree.delete(tree.getMax().?.Key);
+        tree.orderStorageByKey();
+        _ = try tree.insert(std.math.minInt(i64), 123);
+        _ = try tree.insert(std.math.maxInt(i64), 456);
+        // The hint must resolve the current edge after deletion/compaction.
+        try std.testing.expectEqual(@as(i64, 456), tree.delete(std.math.maxInt(i64)).?);
+        tree.compactStorage();
+        _ = try tree.getOrInsert(std.math.maxInt(i64), 456);
+        var it = tree.iteratorAtFirst();
+        var previous: ?i64 = null;
+        var count: usize = 0;
+        while (it.value()) |entry| : (count += 1) {
+            if (previous) |key| try std.testing.expectEqual(math.Order.lt, compare(key, entry.Key));
+            if (options.countChildren) {
+                try std.testing.expectEqual(@as(?usize, count), tree.rank(entry.Key));
+                try std.testing.expectEqual(entry.Key, tree.at(count).Key);
+            }
+            previous = entry.Key;
+            it.next();
+        }
+        try std.testing.expectEqual(@as(usize, 64), count);
+        try std.testing.expectEqual(@as(i64, 123), tree.get(std.math.minInt(i64)).?.*);
+        try std.testing.expectEqual(@as(i64, 456), tree.get(std.math.maxInt(i64)).?.*);
+        try checkHeightAndBalance(&tree);
+        // Deletion can empty the tree while an edge hint remains enabled.
+        while (tree.getMax()) |entry| _ = tree.delete(entry.Key);
+        const before = calls;
+        const refilled = try tree.getOrEmplace(5, Constructor.run, .{ .calls = &calls, .value = @as(i64, 50) });
+        try std.testing.expect(refilled.inserted);
+        try std.testing.expectEqual(@as(i64, 50), refilled.v.*);
+        try std.testing.expectEqual(before + 1, calls);
+        try checkHeightAndBalance(&tree);
+    }
+}
+
+test "extreme key insertion preserves semantics across backends and comparators" {
+    const Reverse = struct {
+        fn compare(a: i64, b: i64) math.Order {
+            return math.order(b, a);
+        }
+    };
+    inline for (.{ .PointerBased, .ArrayBased, .StableArrayBased, .SplitArrayBased }) |backend| {
+        inline for (.{ false, true }) |counted| {
+            const options = Options{ .nodeCacheType = backend, .countChildren = counted };
+            try testExtremeKeyInsertion(options, i64Cmp);
+            try testExtremeKeyInsertion(options, Reverse.compare);
+        }
+    }
 }
 
 test "tree getOrEmplace" {
