@@ -42,6 +42,19 @@ zig build bench -Doptimize=ReleaseFast -Dbench-filter=lookup/string32
 The executable installed by `zig build install-bench` also accepts a positional
 substring filter, `--size`, and `--repeat` directly.
 
+`insert-matrix` compares ascending, descending, random, and existing-key update
+workloads for all backends, with and without subtree counts, using `i64` and
+fixed-width 32-byte string keys. Key generation, string formatting, and tree
+initialization happen before timing. Existing-key updates prefill the tree outside timing; other
+workloads include allocation and insertion into an initially empty tree.
+Checksums, insertion counts, final length, and every stored value are validated
+outside timing. Each sample uses a fresh tree and the suite's fixed allocator.
+
+```sh
+zig build bench -Doptimize=ReleaseFast -Dbench-filter=insert-matrix -Dbench-size=250000 -Dbench-repeat=7
+zig build bench -Doptimize=ReleaseFast -Dbench-filter=insert-matrix/string32/uncounted/random
+```
+
 The `hits` case reads every inserted key once; `misses` queries the adjacent odd
 keys; `mixed` alternates hits and misses in shuffled order. The `churn` case
 removes the first quarter of the shuffled insertion sequence, inserts replacement
@@ -91,3 +104,6 @@ lookup comparison, generated-code inspection, and measurements with fixed CPU
 affinity. On hybrid CPUs, pin before/after processes to the same logical CPU
 (e.g. with `taskset` on Linux) and record the chosen core alongside the power
 profile. A performance power profile alone does not fix CPU affinity.
+
+See the [edge-insertion experiment](bench-extreme-insertion.md) for an adaptive
+minimum/maximum insertion shortcut and its effect on monotonic and random keys.
