@@ -59,12 +59,18 @@ pub fn LocationCache(comptime K: type, comptime V: type, comptime Tags: type) ty
         free_count: usize,
 
         pub fn init(a: std.mem.Allocator) !Self {
+            var keys = try std.ArrayList(K).initCapacity(a, 16);
+            errdefer keys.deinit(a);
+            var values = try std.ArrayList(V).initCapacity(a, 16);
+            errdefer values.deinit(a);
+            var metas = try std.ArrayList(MetaStorage).initCapacity(a, 16);
+            errdefer metas.deinit(a);
             return .{
                 .a = a,
                 .fast_deinit_allowed = cache_contract.fastDeinitAllowed(a),
-                .keys = try std.ArrayList(K).initCapacity(a, 16),
-                .values = try std.ArrayList(V).initCapacity(a, 16),
-                .metas = try std.ArrayList(MetaStorage).initCapacity(a, 16),
+                .keys = keys,
+                .values = values,
+                .metas = metas,
                 .links = try std.ArrayList(LinkSlot).initCapacity(a, 16),
                 .free_head = InvalidAddr,
                 .free_count = 0,
@@ -295,6 +301,16 @@ pub fn LocationCache(comptime K: type, comptime V: type, comptime Tags: type) ty
             self.free_head = InvalidAddr;
         }
     };
+}
+
+test "split locationcache init cleans up on every allocation failure" {
+    const Scenario = struct {
+        fn run(allocator: std.mem.Allocator) !void {
+            var cache = try LocationCache(i64, i64, struct {}).init(allocator);
+            defer cache.deinit();
+        }
+    };
+    try std.testing.checkAllAllocationFailures(std.testing.allocator, Scenario.run, .{});
 }
 
 test "split locationcache reclaim" {

@@ -129,6 +129,7 @@ pub fn LocationCache(comptime K: type, comptime V: type, comptime Tags: type) ty
             }
             if (@as(usize, self.len) == self.chunks.items.len * chunk_len) {
                 const chunk = try self.a.create(Chunk);
+                errdefer self.a.destroy(chunk);
                 try self.chunks.append(self.a, chunk);
             }
 
@@ -369,5 +370,54 @@ test "stable locationcache reserveNodes" {
     for (0..1025) |_| {
         _ = try lc.create();
         try std.testing.expectEqual(@as(usize, 2), lc.chunks.items.len);
+    }
+}
+
+test "stable locationcache create preserves storage on allocation failure" {
+    const Cache = LocationCache(i64, i64, struct {});
+    for ([_]bool{ false, true }) |after_clear| {
+        // Fail either chunk allocation or chunk-list growth after it succeeds.
+        for (0..2) |successful_allocations| {
+            var allocator = std.testing.FailingAllocator.init(std.testing.allocator, .{});
+            {
+                var cache = try Cache.init(allocator.allocator());
+                defer cache.deinit();
+                if (after_clear) {
+                    _ = try cache.create();
+                    cache.clearAll();
+                } else {
+                    // Fill every allocated chunk-list entry so the next chunk
+                    // requires list growth, regardless of ArrayList's policy.
+                    const count = cache.chunks.capacity * Cache.chunk_len;
+                    for (0..count) |i| {
+                        const loc = try cache.create();
+                        cache.keyPtr(loc).* = @intCast(i);
+                        cache.valuePtr(loc).* = @intCast(i * 10);
+                    }
+                }
+                const old_len = cache.len;
+                const old_chunks = cache.chunks.items.len;
+                allocator.fail_index = allocator.alloc_index + successful_allocations;
+                allocator.resize_fail_index = allocator.resize_index;
+                try std.testing.expectError(error.OutOfMemory, cache.create());
+                try std.testing.expect(allocator.has_induced_failure);
+                try std.testing.expectEqual(old_len, cache.len);
+                try std.testing.expectEqual(old_chunks, cache.chunks.items.len);
+                try std.testing.expectEqual(@as(usize, 0), cache.free_count);
+                try std.testing.expectEqual(Cache.InvalidAddr, cache.free_head);
+                for (0..old_len) |i| {
+                    const loc = Cache.locationAt(&cache, i);
+                    try std.testing.expectEqual(@as(i64, @intCast(i)), cache.keyPtr(loc).*);
+                    try std.testing.expectEqual(@as(i64, @intCast(i * 10)), cache.valuePtr(loc).*);
+                }
+                allocator.fail_index = std.math.maxInt(usize);
+                allocator.resize_fail_index = std.math.maxInt(usize);
+                const retried = try cache.create();
+                try std.testing.expectEqual(old_len, retried.addr);
+                cache.valuePtr(retried).* = 42;
+                try std.testing.expectEqual(@as(i64, 42), cache.valuePtr(retried).*);
+            }
+            try std.testing.expectEqual(allocator.allocated_bytes, allocator.freed_bytes);
+        }
     }
 }
