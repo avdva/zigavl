@@ -148,6 +148,25 @@ by shifting storage on each insertion. Include the one-time ordering cost in
 your workload comparison. For a build-once/read-many phase, ordered storage may
 make subtree counts unnecessary for fast positional reads.
 
+## Removing the first or last element
+
+`popFirst()` and `popLast()` remove and return the first or last `KV` pair in
+comparator order, or `null` when the tree is empty. With a reversed comparator,
+the first key is the numerically largest key. `KV.Value` is the stored value,
+not a pointer into the node being removed.
+
+Both methods call the shared deletion implementation using the cached minimum
+or maximum location. They perform no key comparisons or search from the root;
+AVL rebalancing, updating extrema, and subtree-count maintenance can still take
+`O(log n)`. They are available on all backends and do not add checks to
+`delete(key)`.
+
+For ordered address-based storage, popping the last element preserves ordering
+while the tree remains nonempty. Popping the first element of a multi-element
+tree invalidates the ordered-storage fast path, as ordinary deletion does.
+`deleteAt(0)` and `deleteAt(len() - 1)` also resolve an edge directly, but require
+a nonempty tree; the pop methods handle emptiness with an optional result.
+
 ## Memory maintenance and lifetime
 
 `compactStorage()` compacts address-based storage after deletions. ArrayBased

@@ -63,6 +63,25 @@ case measures lookup after `orderStorageByKey()` and excludes pointer storage.
 Hit counts, checksums, and tree length are checked outside timing even in
 ReleaseFast. Existing `get/random` remains the sequentially built baseline.
 
+`delete-extreme` drains identically constructed trees from the first or last
+key using `pop`, `by_key` (`delete(key)`), or `by_index` (`deleteAt`). The matrix
+covers all backends with and without subtree counts, and both ordinary and
+ordered storage where supported. The input is a fixed shuffle of dense i64 keys.
+Tree construction, optional storage ordering, and result-buffer allocation are
+outside timing. Each method writes every removed `KV` to the same kind of
+buffer; all keys, values, and the final empty state are checked afterward.
+`by_key` receives the known next key and does not call `getMin`/`getMax` in its
+timed loop. Method order rotates across `--repeat` repetitions; backend and
+layout order remain fixed.
+
+```sh
+zig build bench -Doptimize=ReleaseFast -Dbench-filter=delete-extreme -Dbench-size=250000 -Dbench-repeat=7
+zig build bench -Doptimize=ReleaseFast -Dbench-filter=delete-extreme/uncounted/tree/first
+```
+
+See the [popFirst/popLast comparison](bench-pop-extremes.md) for measurements
+against existing deletion methods and the limits of this workload.
+
 See [the array node layout experiment](bench-node-layout.md) for measured
 slot sizes, comparison methodology, and preliminary timing results.
 

@@ -3,6 +3,7 @@ const zigavl = @import("lib.zig");
 
 // Set once from CLI before running any benchmark.
 var bench_len: usize = 250_000;
+var bench_round: usize = 0;
 const posix = std.posix;
 
 fn i64Cmp(a: i64, b: i64) std.math.Order {
@@ -719,7 +720,73 @@ fn benchInsertionMatrix(comptime backend: []const u8, comptime options: zigavl.O
     }
 }
 
+const ExtremeDeleteMethod = enum { pop, by_key, by_index };
+
+fn benchExtremeDelete(
+    comptime options: zigavl.Options,
+    comptime first: bool,
+    comptime ordered: bool,
+    comptime method: ExtremeDeleteMethod,
+    name: []const u8,
+    a: std.mem.Allocator,
+    keys: []const i64,
+) !void {
+    const T = zigavl.TreeWithOptions(i64, i64, i64Cmp, options);
+    var tree = try T.init(a);
+    defer tree.deinit();
+    for (keys) |key| _ = try tree.insert(key, key * 10 + 7);
+    if (ordered) tree.orderStorageByKey();
+    const removed = try a.alloc(T.KV, keys.len);
+    defer a.free(removed);
+    const start = nowNs();
+    for (removed, 0..) |*kv, i| {
+        switch (method) {
+            .pop => kv.* = (if (first) tree.popFirst() else tree.popLast()) orelse return error.InvalidBenchmarkResult,
+            .by_key => {
+                const key: i64 = @intCast(if (first) i else keys.len - i - 1);
+                kv.* = .{ .Key = key, .Value = tree.delete(key) orelse return error.InvalidBenchmarkResult };
+            },
+            .by_index => kv.* = tree.deleteAt(if (first) 0 else tree.len() - 1),
+        }
+    }
+    const elapsed = nowNs() - start;
+    if (tree.len() != 0 or tree.getMin() != null or tree.getMax() != null)
+        return error.InvalidBenchmarkResult;
+    var checksum: i64 = 0;
+    for (removed, 0..) |kv, i| {
+        const expected: i64 = @intCast(if (first) i else keys.len - i - 1);
+        if (kv.Key != expected or kv.Value != expected * 10 + 7) return error.InvalidBenchmarkResult;
+        checksum += kv.Value;
+    }
+    report(name, keys.len, elapsed, checksum);
+}
+
+fn benchExtremeDeleteMatrix(comptime backend: []const u8, comptime options: zigavl.Options, a: std.mem.Allocator, keys: []const i64, filter: ?[]const u8) !void {
+    inline for (.{ false, true }) |counted| {
+        inline for (.{ false, true }) |ordered| {
+            if (!ordered or options.nodeCacheType != .PointerBased) {
+                inline for (.{ true, false }) |first| {
+                    const configured = zigavl.Options{ .nodeCacheType = options.nodeCacheType, .countChildren = counted };
+                    const prefix = backend ++ "/delete-extreme/" ++ (if (counted) "counted/" else "uncounted/") ++
+                        (if (ordered) "ordered/" else "tree/") ++ (if (first) "first/" else "last/");
+                    // Rotate method order between repetitions to reduce bias.
+                    for (0..3) |offset| {
+                        const method: ExtremeDeleteMethod = @fromBackingInt(@intCast((bench_round + offset) % 3));
+                        switch (method) {
+                            inline else => |m| {
+                                const name = prefix ++ @tagName(m);
+                                if (shouldRun(filter, name)) try benchExtremeDelete(configured, first, ordered, m, name, a, keys);
+                            },
+                        }
+                    }
+                }
+            }
+        }
+    }
+}
+
 fn benchTree(comptime name: []const u8, comptime options: zigavl.Options, a: std.mem.Allocator, random_keys: []const i64, filter: ?[]const u8) !void {
+    try benchExtremeDeleteMatrix(name, options, a, random_keys, filter);
     try benchInsertionMatrix(name, options, a, random_keys, filter);
     try benchLookupMatrix(name, options, a, random_keys, filter);
     if (shouldRun(filter, name ++ "/insert/sequential")) try benchSequentialInsert(name, options, a);
@@ -782,7 +849,8 @@ pub fn main(init: std.process.Init) !void {
         std.debug.print("zigavl basic benchmarks: {d} items, repeat={d}\n", .{ bench_len, parsed.repeat });
     }
 
-    for (0..parsed.repeat) |_| {
+    for (0..parsed.repeat) |round| {
+        bench_round = round;
         try benchTree("pointer", .{ .nodeCacheType = .PointerBased }, a, random_keys, parsed.filter);
         try benchTree("array", .{ .nodeCacheType = .ArrayBased }, a, random_keys, parsed.filter);
         try benchTree("stable-array", .{ .nodeCacheType = .StableArrayBased }, a, random_keys, parsed.filter);

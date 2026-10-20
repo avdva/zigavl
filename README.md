@@ -69,6 +69,8 @@ pub fn updateKey(self: *Self, old_key: K, new_key: K) ?*V
 
 // delete:
 pub fn delete(self: *Self, k: K) ?V
+pub fn popFirst(self: *Self) ?KV
+pub fn popLast(self: *Self) ?KV
 pub fn deleteIterator(self: *Self, it: Iterator) Iterator
 
 // find:
@@ -239,6 +241,14 @@ _ = try reserved.insert(42, 420);
 // Reuse the reservation for the next batch.
 reserved.clearRetainingCapacity();
 _ = try reserved.insert(7, 70);
+_ = try reserved.insert(9, 90);
+
+// Remove an edge directly, without searching by key.
+const first = reserved.popFirst().?; // KV{ .Key = 7, .Value = 70 }
+std.debug.assert(first.Key == 7 and first.Value == 70);
+const last = reserved.popLast().?; // KV{ .Key = 9, .Value = 90 }
+std.debug.assert(last.Key == 9 and last.Value == 90);
+std.debug.assert(reserved.popLast() == null); // Empty tree.
 ```
 
 `1_000` is the total live element capacity, including existing elements and

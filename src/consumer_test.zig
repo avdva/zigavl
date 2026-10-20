@@ -18,4 +18,9 @@ test "zigavl module can be imported by consumers" {
     try std.testing.expectEqual(@as(i64, 1), tree.iteratorAtFirst().value().?.Key);
     tree.clearRetainingCapacity();
     try std.testing.expectEqual(@as(usize, 0), tree.len());
+    _ = try tree.insert(3, 30);
+    _ = try tree.insert(7, 70);
+    try std.testing.expectEqual(@as(i64, 3), tree.popFirst().?.Key);
+    try std.testing.expectEqual(@as(i64, 70), tree.popLast().?.Value);
+    try std.testing.expect(tree.popFirst() == null and tree.popLast() == null);
 }
