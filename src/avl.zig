@@ -375,6 +375,7 @@ fn InitTreeType(comptime K: type, comptime V: type, comptime Cache: type, compti
         max: ?Location,
         storage_ordered: bool,
         insertion_edge: direction = .center,
+        deletion_edge: direction = .center,
 
         // init initializes the tree with default options.
         pub fn init(a: std.mem.Allocator) !Self {
@@ -413,6 +414,7 @@ fn InitTreeType(comptime K: type, comptime V: type, comptime Cache: type, compti
             self.max = null;
             self.storage_ordered = false;
             self.insertion_edge = .center;
+            self.deletion_edge = .center;
         }
 
         // deinit releases the memory taken by all the nodes.
@@ -833,7 +835,7 @@ fn InitTreeType(comptime K: type, comptime V: type, comptime Cache: type, compti
         // Returns the value associated with k, if the node was present in the tree.
         // Time complexity: O(logn).
         pub fn delete(self: *Self, k: K) ?V {
-            const res = self.locate(k);
+            const res = self.locateForDelete(k);
             if (res.dir != .center) {
                 return null;
             }
@@ -869,18 +871,22 @@ fn InitTreeType(comptime K: type, comptime V: type, comptime Cache: type, compti
         fn deleteAndReplace(self: *Self, loc: Location) void {
             const replacement = self.findReplacement(loc);
             const removed_balance = self.balance(loc);
+            var removed_edge: direction = .center;
             if (self.min) |min| {
                 if (self.locEq(loc, min)) {
                     self.min = self.nextInOrderLocation(loc);
+                    removed_edge = .left;
                 }
             }
             if (self.max) |max| {
                 if (self.locEq(loc, max)) {
                     self.max = self.prevInOrderLocation(loc);
+                    removed_edge = .right;
                 }
             }
             const parent_loc = self.parent(loc);
             self.length -= 1;
+            self.deletion_edge = removed_edge;
             if (replacement) |rep| {
                 const replacement_parent = self.parent(rep).?;
                 const replacement_dir = self.childDir(replacement_parent, rep);
@@ -1721,6 +1727,22 @@ fn InitTreeType(comptime K: type, comptime V: type, comptime Cache: type, compti
             return self.locate(k);
         }
 
+        // Predict another deletion from the same edge, resolving its current
+        // location after mutations. A miss disables the hint until an edge is
+        // removed again, avoiding extra comparisons on every random query.
+        fn locateForDelete(self: *Self, k: K) LocateResult {
+            const edge = switch (self.deletion_edge) {
+                .left => self.min,
+                .right => self.max,
+                .center => return self.locate(k),
+            };
+            if (edge) |loc| {
+                if (Comparer(k, self.keyPtr(loc).*) == .eq) return .{ .loc = loc, .dir = .center };
+            }
+            self.deletion_edge = .center;
+            return self.locate(k);
+        }
+
         fn locate(self: *Self, k: K) LocateResult {
             var result = LocateResult{
                 .loc = self.root,
@@ -2231,7 +2253,7 @@ test "tree ordered storage survives tail mutations" {
     try testTreeOrderedStorageTailMutations(.{ .countChildren = true, .nodeCacheType = .SplitArrayBased });
 }
 
-fn testPopExtremes(comptime options: Options, comptime reverse: bool) !void {
+fn testPopExtremes(comptime options: Options, comptime reverse: bool, comptime by_key: bool) !void {
     const Compare = struct {
         var calls: usize = 0;
         fn compare(a: i64, b: i64) math.Order {
@@ -2245,6 +2267,7 @@ fn testPopExtremes(comptime options: Options, comptime reverse: bool) !void {
     for (0..3) |pattern| {
         try std.testing.expect(tree.popFirst() == null);
         try std.testing.expect(tree.popLast() == null);
+        if (by_key) try std.testing.expect(tree.delete(0) == null);
         // Shuffled dense keys, then deleted slots, exercise every backend's
         // reuse path and relocation during ordered-storage preparation.
         var keys: [65]i64 = undefined;
@@ -2262,8 +2285,15 @@ fn testPopExtremes(comptime options: Options, comptime reverse: bool) !void {
             const expected = if (take_low) low else high;
             const was_ordered = tree.storage_ordered;
             Compare.calls = 0;
-            const kv = (if (first) tree.popFirst() else tree.popLast()).?;
-            try std.testing.expectEqual(@as(usize, 0), Compare.calls);
+            const kv = if (by_key)
+                T.KV{ .Key = expected, .Value = tree.delete(expected).? }
+            else
+                (if (first) tree.popFirst() else tree.popLast()).?;
+            if (by_key) {
+                if (pattern != 2 and i != 0) try std.testing.expectEqual(@as(usize, 1), Compare.calls);
+            } else {
+                try std.testing.expectEqual(@as(usize, 0), Compare.calls);
+            }
             try std.testing.expectEqual(expected, kv.Key);
             try std.testing.expectEqual(expected * 10 + 7, kv.Value);
             if (take_low) {
@@ -2303,13 +2333,48 @@ fn testPopExtremes(comptime options: Options, comptime reverse: bool) !void {
     try std.testing.expectEqual(@as(i64, if (reverse) 456 else 123), first.Value);
     try std.testing.expectEqual(@as(i64, if (reverse) std.math.minInt(i64) else std.math.maxInt(i64)), last.Key);
     try std.testing.expectEqual(@as(i64, if (reverse) 123 else 456), last.Value);
+    if (by_key) {
+        // A prediction must resolve current edges after insertion, relocation,
+        // missing-key queries, clearing, bulk loading, and updateKey.
+        tree.clearRetainingCapacity();
+        for (0..32) |i| _ = try tree.insert(@intCast(i), @intCast(i));
+        _ = tree.delete(tree.getMin().?.Key);
+        const old_min = tree.getMin().?.Key;
+        _ = try tree.insert(if (reverse) 100 else -100, 999);
+        try std.testing.expectEqual(old_min, tree.delete(old_min).?);
+        _ = tree.delete(tree.getMax().?.Key);
+        tree.compactStorage();
+        tree.orderStorageByKey();
+        const last_key = tree.getMax().?.Key;
+        try std.testing.expectEqual(last_key, tree.delete(last_key).?);
+        try std.testing.expect(tree.delete(1000) == null);
+        try std.testing.expect(tree.delete(1000) == null);
+        try checkHeightAndBalance(&tree);
+        try tree.buildFromSorted(if (reverse)
+            &.{ .{ .Key = 20, .Value = 20 }, .{ .Key = 10, .Value = 10 } }
+        else
+            &.{ .{ .Key = 10, .Value = 10 }, .{ .Key = 20, .Value = 20 } });
+        try std.testing.expectEqual(@as(i64, 20), tree.delete(20).?);
+        _ = tree.updateKey(10, 5);
+        try std.testing.expectEqual(@as(i64, 10), tree.delete(5).?);
+        try std.testing.expect(tree.delete(5) == null);
+    }
 }
 
 test "popFirst and popLast remove comparator extrema without comparisons" {
     inline for (.{ .PointerBased, .ArrayBased, .StableArrayBased, .SplitArrayBased }) |backend| {
         inline for (.{ false, true }) |counted| {
-            try testPopExtremes(.{ .nodeCacheType = backend, .countChildren = counted }, false);
-            try testPopExtremes(.{ .nodeCacheType = backend, .countChildren = counted }, true);
+            try testPopExtremes(.{ .nodeCacheType = backend, .countChildren = counted }, false, false);
+            try testPopExtremes(.{ .nodeCacheType = backend, .countChildren = counted }, true, false);
+        }
+    }
+}
+
+test "delete predicts edge runs and safely falls back after mutations" {
+    inline for (.{ .PointerBased, .ArrayBased, .StableArrayBased, .SplitArrayBased }) |backend| {
+        inline for (.{ false, true }) |counted| {
+            try testPopExtremes(.{ .nodeCacheType = backend, .countChildren = counted }, false, true);
+            try testPopExtremes(.{ .nodeCacheType = backend, .countChildren = counted }, true, true);
         }
     }
 }

@@ -158,8 +158,14 @@ not a pointer into the node being removed.
 Both methods call the shared deletion implementation using the cached minimum
 or maximum location. They perform no key comparisons or search from the root;
 AVL rebalancing, updating extrema, and subtree-count maintenance can still take
-`O(log n)`. They are available on all backends and do not add checks to
-`delete(key)`.
+`O(log n)`. They are available on all backends.
+
+`delete(key)` also predicts consecutive removals from an edge. After deleting
+a minimum or maximum it first checks the current edge in that direction; a
+match avoids root search, while a miss disables the hint and uses ordinary
+lookup. Interior deletion disables the hint as well. This uses one key
+comparison for continued edge runs; the explicit pop methods use none. See the
+[adaptive-delete measurements](bench-adaptive-delete.md) for gains and overhead.
 
 For ordered address-based storage, popping the last element preserves ordering
 while the tree remains nonempty. Popping the first element of a multi-element
