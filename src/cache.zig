@@ -59,5 +59,6 @@ test "only indexed built-in caches support reservation" {
     inline for (.{ .PointerBased, .ArrayBased, .StableArrayBased, .SplitArrayBased }) |backend| {
         const capabilities = getCapabilities(Create(backend, i64, i64, struct {}));
         try std.testing.expectEqual(backend != .PointerBased, capabilities.hasReserveNodes);
+        try std.testing.expectEqual(backend != .PointerBased, capabilities.hasClearRetainingCapacity);
     }
 }

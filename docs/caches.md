@@ -103,6 +103,7 @@ allocations, including when deleted slots are reused. Constructors supplied to
 `getOrEmplace` may still allocate themselves. `clear`, `compactStorage`,
 `orderStorageByKey`, and `buildFromSorted` may discard reserved capacity; reserve
 again afterward if needed.
+`clearRetainingCapacity()` preserves the reservation for the next fill.
 
 Growth can invalidate value pointers for ArrayBased and SplitArrayBased, even
 if a later allocation fails. StableArrayBased keeps existing value pointers.
@@ -161,11 +162,26 @@ nodes when reclaiming storage matters more than keeping references stable.
 It does not retain array capacity for the next fill. Actual memory release
 behavior also depends on the allocator.
 
+`clearRetainingCapacity()` removes every element while retaining all allocated
+arrays and chunks, including capacity reserved by `ensureCapacity`. It performs
+no allocations or frees and takes `O(1)` for ArrayBased, SplitArrayBased, and
+StableArrayBased. Repeated clearing of an empty tree also retains its capacity.
+It resets the free list and ordered-storage state; later insertions start at
+the beginning of storage. For PointerBased, it frees nodes in `O(n)` like
+`clear()`, even when fast deinit is enabled.
+
+Use it between batches when memory reuse matters; use `clear()` to release
+storage. Both methods invalidate all previous entries, value pointers,
+locations, and iterators. They do not release resources owned by keys or values;
+clean those up before clearing if needed. Retained capacity is released by
+`clear()` or `deinit()` and may be reduced by other storage maintenance.
+
 For arenas or fixed buffers, `initWithOptions(..., .{ .allowFastDeinit = .auto })`
 can avoid per-node destruction when the backend recognizes that allocator.
 `.always` skips node destruction unconditionally: use it only when the memory
 will be reclaimed by the allocator owner. Backend-owned storage cleanup still
-runs. This option affects `deinit`, not the semantics of `clear`.
+runs. This option affects `deinit`, not the semantics of `clear` or
+`clearRetainingCapacity`.
 
 ## Measuring the tradeoffs
 

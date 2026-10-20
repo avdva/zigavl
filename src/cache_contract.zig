@@ -215,8 +215,8 @@ fn requireDirMethod(
 //  - SequentialBuilder and beginSequentialBuild(count): create nodes in a
 //    session that supports indexed access and rolls back uncommitted nodes.
 //
-// Optional capabilities such as clearAll(), reclaim(), and ordered-storage
-// helpers are discovered separately by getCapabilities().
+// Optional capabilities such as clearAll(), clearAllRetainingCapacity(),
+// reclaim(), and ordered-storage helpers are discovered by getCapabilities().
 pub fn assertBaseRequirements(comptime Cache: type, comptime K: type, comptime V: type, comptime Tags: type) void {
     requireDecl(Cache, "Location");
     const Location = Cache.Location;
@@ -268,6 +268,7 @@ pub fn assertBaseRequirements(comptime Cache: type, comptime K: type, comptime V
 // optional cache operations that the tree can use when they are available.
 pub const Capabilities = struct {
     hasReserveNodes: bool,
+    hasClearRetainingCapacity: bool,
     hasFastClear: bool,
     hasCompactStorage: bool,
     hasOrderedStorage: bool,
@@ -279,8 +280,13 @@ pub fn getCapabilities(comptime Cache: type) Capabilities {
     if (has_reserve_nodes) {
         requireErrorUnionMethod(@TypeOf(Cache.reserveNodes), "reserveNodes", &.{ *Cache, usize }, void);
     }
+    const has_clear_retaining_capacity = @hasDecl(Cache, "clearAllRetainingCapacity");
+    if (has_clear_retaining_capacity) {
+        requireMethod(@TypeOf(Cache.clearAllRetainingCapacity), "clearAllRetainingCapacity", &.{*Cache}, void);
+    }
     return .{
         .hasReserveNodes = has_reserve_nodes,
+        .hasClearRetainingCapacity = has_clear_retaining_capacity,
         .hasFastClear = @hasDecl(Cache, "clearAll"),
         .hasCompactStorage = @hasDecl(Cache, "reclaim"),
         .hasOrderedStorage = @hasDecl(Cache, "relocate") and

@@ -97,6 +97,12 @@ pub fn LocationCache(comptime K: type, comptime V: type, comptime Tags: type) ty
             self.free_count = 0;
         }
 
+        pub fn clearAllRetainingCapacity(self: *Self) void {
+            self.len = 0;
+            self.free_head = InvalidAddr;
+            self.free_count = 0;
+        }
+
         // reserveNodes allocates enough chunks for count more create calls.
         // Existing free slots count toward the reserve, and allocated chunks remain
         // available if a later allocation fails.

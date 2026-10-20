@@ -81,6 +81,12 @@ pub fn LocationCache(comptime K: type, comptime V: type, comptime Tags: type) ty
             self.free_count = 0;
         }
 
+        pub fn clearAllRetainingCapacity(self: *Self) void {
+            self.nodes.clearRetainingCapacity();
+            self.free_head = InvalidAddr;
+            self.free_count = 0;
+        }
+
         // reserveNodes ensures that count more create calls can succeed without
         // growing the backing array. Existing free slots count toward the reserve.
         pub fn reserveNodes(self: *Self, count: usize) !void {
