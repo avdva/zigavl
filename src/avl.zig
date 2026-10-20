@@ -439,6 +439,19 @@ fn InitTreeType(comptime K: type, comptime V: type, comptime Cache: type, compti
             self.resetTreeLinks();
         }
 
+        /// Removes all elements while retaining array/chunk storage for reuse.
+        /// O(1) for built-in indexed backends; PointerBased frees nodes in O(n).
+        /// Invalidates all entries, value pointers, locations, and iterators.
+        /// Like clear(), does not destroy resources owned by keys or values.
+        pub fn clearRetainingCapacity(self: *Self) void {
+            if (cacheCapabilities.hasClearRetainingCapacity) {
+                self.lc.clearAllRetainingCapacity();
+            } else {
+                self.destroyAllNodes();
+            }
+            self.resetTreeLinks();
+        }
+
         fn validateStrictlySorted(items: []const KV) !void {
             if (items.len == 0) {
                 return;
@@ -1836,6 +1849,103 @@ fn testTreeBuildFromSorted(comptime options: Options) !void {
     try testTreeBuildFromSortedWithItems(TreeType, &t, &[_]TreeType.KV{
         .{ .Key = 0, .Value = 0 },
     }, shouldBeOrdered);
+}
+
+fn testTreeClearRetainingCapacity(comptime options: Options) !void {
+    const retains_storage = options.nodeCacheType != .PointerBased;
+    var allocator = std.testing.FailingAllocator.init(std.testing.allocator, .{});
+    const TreeType = TreeWithOptions(i64, i64, i64Cmp, options);
+    var tree = try TreeType.init(allocator.allocator());
+    defer tree.deinit();
+
+    if (retains_storage) try tree.ensureCapacity(1200);
+    const allocated = allocator.allocated_bytes;
+    const freed = allocator.freed_bytes;
+    if (retains_storage) {
+        allocator.fail_index = allocator.alloc_index;
+        allocator.resize_fail_index = allocator.resize_index;
+    }
+    // Clearing an empty reserved tree must retain its storage, too.
+    tree.clearRetainingCapacity();
+    for (0..3) |round| {
+        const base: i64 = @intCast(round * 1200);
+        for (0..1200) |i| {
+            const key = base + @as(i64, @intCast(i));
+            _ = try tree.insert(key, key * 10);
+        }
+        try std.testing.expectEqual(@as(usize, 1200), tree.len());
+        var it = tree.iteratorAtFirst();
+        for (0..1200) |i| {
+            const key = base + @as(i64, @intCast(i));
+            try std.testing.expectEqual(key, it.value().?.Key);
+            try std.testing.expectEqual(key * 10, it.value().?.Value.*);
+            if (options.countChildren) {
+                try std.testing.expectEqual(@as(?usize, i), tree.rank(key));
+                try std.testing.expectEqual(key, tree.at(i).Key);
+            }
+            it.next();
+        }
+        try std.testing.expect(it.value() == null);
+        try checkHeightAndBalance(&tree);
+        if (round == 0) {
+            for (0..600) |i| {
+                const key = base + @as(i64, @intCast(i * 2));
+                try std.testing.expectEqual(key * 10, tree.delete(key).?);
+            }
+        } else if (round == 1) {
+            tree.orderStorageByKey();
+        }
+        tree.clearRetainingCapacity();
+        tree.clearRetainingCapacity();
+        try std.testing.expectEqual(@as(usize, 0), tree.len());
+        try std.testing.expect(tree.root == null and tree.min == null and tree.max == null);
+        try std.testing.expect(!tree.storage_ordered);
+        try std.testing.expect(tree.get(base) == null);
+        try std.testing.expect(tree.getMin() == null and tree.getMax() == null);
+        try std.testing.expect(tree.iteratorAtFirst().value() == null);
+        try std.testing.expect(tree.iteratorAtLast().value() == null);
+        try std.testing.expect(tree.lowerBound(base).value() == null);
+        try std.testing.expect(tree.rank(base) == null);
+        if (retains_storage) {
+            try std.testing.expectEqual(@as(usize, 0), tree.lc.slotsLen());
+            try std.testing.expectEqual(@as(usize, 0), tree.lc.freeCount());
+            try std.testing.expectEqual(@TypeOf(tree.lc).InvalidAddr, tree.lc.freeHead());
+            try std.testing.expectEqual(allocated, allocator.allocated_bytes);
+            try std.testing.expectEqual(freed, allocator.freed_bytes);
+        } else {
+            try std.testing.expectEqual(allocator.allocated_bytes, allocator.freed_bytes);
+        }
+    }
+    try std.testing.expect(!allocator.has_induced_failure);
+    allocator.fail_index = std.math.maxInt(usize);
+    allocator.resize_fail_index = std.math.maxInt(usize);
+    // Other maintenance and bulk-loading operations must still work afterward.
+    tree.compactStorage();
+    try tree.buildFromSorted(&.{ .{ .Key = 4, .Value = 40 }, .{ .Key = 8, .Value = 80 } });
+    try std.testing.expectEqual(@as(i64, 80), tree.get(8).?.*);
+    tree.clearRetainingCapacity();
+    tree.clear();
+    try std.testing.expectEqual(allocator.allocated_bytes, allocator.freed_bytes);
+    _ = try tree.insert(9, 90);
+    try std.testing.expectEqual(@as(i64, 90), tree.get(9).?.*);
+}
+
+test "tree clearRetainingCapacity reuses storage across backends and options" {
+    inline for (.{ .PointerBased, .ArrayBased, .StableArrayBased, .SplitArrayBased }) |backend| {
+        inline for (.{ false, true }) |count_children| {
+            try testTreeClearRetainingCapacity(.{ .nodeCacheType = backend, .countChildren = count_children });
+        }
+    }
+}
+
+test "pointer clearRetainingCapacity frees nodes with fast deinit enabled" {
+    var allocator = std.testing.FailingAllocator.init(std.testing.allocator, .{});
+    var tree = try Tree(i64, i64, i64Cmp).initWithOptions(allocator.allocator(), .{ .allowFastDeinit = .always });
+    defer tree.deinit();
+    for (0..32) |i| _ = try tree.insert(@intCast(i), @intCast(i));
+    tree.clearRetainingCapacity();
+    try std.testing.expectEqual(@as(usize, 0), tree.len());
+    try std.testing.expectEqual(allocator.allocated_bytes, allocator.freed_bytes);
 }
 
 fn testTreeEnsureCapacity(comptime options: Options) !void {

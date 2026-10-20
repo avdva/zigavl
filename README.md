@@ -54,6 +54,7 @@ pub fn deinit()
 
 // clear:
 pub fn clear(self: *Self) void
+pub fn clearRetainingCapacity(self: *Self) void
 
 // insert/modify:
 pub const InsertResult = struct {
@@ -234,12 +235,18 @@ defer reserved.deinit();
 
 try reserved.ensureCapacity(1_000);
 _ = try reserved.insert(42, 420);
+
+// Reuse the reservation for the next batch.
+reserved.clearRetainingCapacity();
+_ = try reserved.insert(7, 70);
 ```
 
 `1_000` is the total live element capacity, including existing elements and
 reusable free slots. Smaller requests do not shrink storage. PointerBased does
 not support this method; see [capacity guarantees](docs/caches.md#reserving-capacity)
 for pointer lifetimes and operations that can discard the reservation.
+`clearRetainingCapacity()` empties array/chunk storage while keeping its capacity
+for reuse; on PointerBased it frees nodes like `clear()`.
 
 ## Benchmarks
 
