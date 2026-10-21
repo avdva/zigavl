@@ -115,7 +115,7 @@ Notes:
 - Iterators are valid only for the tree that created them. If the node pointed to by an iterator is deleted, that
   iterator becomes invalid; use the iterator returned by `deleteIterator`.
 
-Example:
+Example (see the executable [example test](src/lib.zig)):
 ```zig
 
 const std = @import("std");
