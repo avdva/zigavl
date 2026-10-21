@@ -69,8 +69,8 @@ pub fn updateKey(self: *Self, old_key: K, new_key: K) ?*V
 
 // delete:
 pub fn delete(self: *Self, k: K) ?V
-pub fn popFirst(self: *Self) ?KV
-pub fn popLast(self: *Self) ?KV
+pub fn deleteFirst(self: *Self) ?KV
+pub fn deleteLast(self: *Self) ?KV
 pub fn deleteIterator(self: *Self, it: Iterator) Iterator
 
 // find:

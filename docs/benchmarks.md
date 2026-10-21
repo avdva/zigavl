@@ -64,7 +64,7 @@ Hit counts, checksums, and tree length are checked outside timing even in
 ReleaseFast. Existing `get/random` remains the sequentially built baseline.
 
 `delete-extreme` drains identically constructed trees from the first or last
-key using `pop`, `by_key` (`delete(key)`), or `by_index` (`deleteAt`). The matrix
+key using `by_edge`, `by_key` (`delete(key)`), or `by_index` (`deleteAt`). The matrix
 covers all backends with and without subtree counts, and both ordinary and
 ordered storage where supported. The input is a fixed shuffle of dense i64 keys.
 Tree construction, optional storage ordering, and result-buffer allocation are
@@ -79,7 +79,7 @@ zig build bench -Doptimize=ReleaseFast -Dbench-filter=delete-extreme -Dbench-siz
 zig build bench -Doptimize=ReleaseFast -Dbench-filter=delete-extreme/uncounted/tree/first
 ```
 
-See the [popFirst/popLast comparison](bench-pop-extremes.md) for measurements
+See the [deleteFirst/deleteLast comparison](bench-delete-extremes.md) for measurements
 against existing deletion methods and the limits of this workload.
 
 See [the array node layout experiment](bench-node-layout.md) for measured

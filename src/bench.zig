@@ -720,7 +720,7 @@ fn benchInsertionMatrix(comptime backend: []const u8, comptime options: zigavl.O
     }
 }
 
-const ExtremeDeleteMethod = enum { pop, by_key, by_index };
+const ExtremeDeleteMethod = enum { by_edge, by_key, by_index };
 
 fn benchExtremeDelete(
     comptime options: zigavl.Options,
@@ -741,7 +741,7 @@ fn benchExtremeDelete(
     const start = nowNs();
     for (removed, 0..) |*kv, i| {
         switch (method) {
-            .pop => kv.* = (if (first) tree.popFirst() else tree.popLast()) orelse return error.InvalidBenchmarkResult,
+            .by_edge => kv.* = (if (first) tree.deleteFirst() else tree.deleteLast()) orelse return error.InvalidBenchmarkResult,
             .by_key => {
                 const key: i64 = @intCast(if (first) i else keys.len - i - 1);
                 kv.* = .{ .Key = key, .Value = tree.delete(key) orelse return error.InvalidBenchmarkResult };
