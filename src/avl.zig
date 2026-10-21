@@ -843,6 +843,25 @@ fn InitTreeType(comptime K: type, comptime V: type, comptime Cache: type, compti
             return v;
         }
 
+        /// Removes and returns the first key/value pair in comparator order.
+        /// Returns null for an empty tree. No key comparisons or root search;
+        /// rebalancing and subtree-count maintenance can still take O(log n).
+        pub fn popFirst(self: *Self) ?KV {
+            const loc = self.min orelse return null;
+            const kv = KV{ .Key = self.keyPtr(loc).*, .Value = self.valuePtr(loc).* };
+            self.deleteLocation(loc);
+            return kv;
+        }
+
+        /// Removes and returns the last key/value pair in comparator order.
+        /// Returns null for an empty tree. Like popFirst(), returns owned values.
+        pub fn popLast(self: *Self) ?KV {
+            const loc = self.max orelse return null;
+            const kv = KV{ .Key = self.keyPtr(loc).*, .Value = self.valuePtr(loc).* };
+            self.deleteLocation(loc);
+            return kv;
+        }
+
         // deleteAndReplace removes loc from the tree and moves a replacement node
         // into its place when needed. It updates min/max eagerly, reconnects parent
         // and child links, and starts rebalancing at the lowest node whose height
@@ -2210,6 +2229,89 @@ test "tree ordered storage survives tail mutations" {
     try testTreeOrderedStorageTailMutations(.{ .countChildren = true, .nodeCacheType = .StableArrayBased });
     try testTreeOrderedStorageTailMutations(.{ .countChildren = false, .nodeCacheType = .SplitArrayBased });
     try testTreeOrderedStorageTailMutations(.{ .countChildren = true, .nodeCacheType = .SplitArrayBased });
+}
+
+fn testPopExtremes(comptime options: Options, comptime reverse: bool) !void {
+    const Compare = struct {
+        var calls: usize = 0;
+        fn compare(a: i64, b: i64) math.Order {
+            calls += 1;
+            return if (reverse) math.order(b, a) else math.order(a, b);
+        }
+    };
+    const T = TreeWithOptions(i64, i64, Compare.compare, options);
+    var tree = try T.init(std.testing.allocator);
+    defer tree.deinit();
+    for (0..3) |pattern| {
+        try std.testing.expect(tree.popFirst() == null);
+        try std.testing.expect(tree.popLast() == null);
+        // Shuffled dense keys, then deleted slots, exercise every backend's
+        // reuse path and relocation during ordered-storage preparation.
+        var keys: [65]i64 = undefined;
+        for (&keys, 0..) |*key, i| key.* = @intCast(i);
+        var random = std.Random.DefaultPrng.init(42);
+        random.random().shuffle(i64, &keys);
+        for (keys) |key| _ = try tree.insert(key, key * 10 + 7);
+        _ = tree.delete(32);
+        if (pattern != 0) tree.orderStorageByKey();
+        var low: i64 = 0;
+        var high: i64 = 64;
+        for (0..64) |i| {
+            const first = pattern == 0 or (pattern == 2 and i % 2 == 0);
+            const take_low = first != reverse;
+            const expected = if (take_low) low else high;
+            const was_ordered = tree.storage_ordered;
+            Compare.calls = 0;
+            const kv = (if (first) tree.popFirst() else tree.popLast()).?;
+            try std.testing.expectEqual(@as(usize, 0), Compare.calls);
+            try std.testing.expectEqual(expected, kv.Key);
+            try std.testing.expectEqual(expected * 10 + 7, kv.Value);
+            if (take_low) {
+                low += 1;
+                if (low == 32) low += 1;
+            } else {
+                high -= 1;
+                if (high == 32) high -= 1;
+            }
+            try std.testing.expectEqual(@as(usize, 63 - i), tree.len());
+            if (was_ordered) try std.testing.expectEqual(!first and tree.len() != 0, tree.storage_ordered);
+            try std.testing.expect(tree.get(expected) == null);
+            if (tree.len() != 0) {
+                const min_key = if (reverse) high else low;
+                const max_key = if (reverse) low else high;
+                try std.testing.expectEqual(min_key, tree.getMin().?.Key);
+                try std.testing.expectEqual(max_key, tree.getMax().?.Key);
+                try std.testing.expectEqual(min_key, tree.iteratorAtFirst().value().?.Key);
+                try std.testing.expectEqual(max_key, tree.iteratorAtLast().value().?.Key);
+                if (options.countChildren) {
+                    try std.testing.expectEqual(@as(?usize, 0), tree.rank(min_key));
+                    try std.testing.expectEqual(@as(?usize, tree.len() - 1), tree.rank(max_key));
+                    try std.testing.expectEqual(min_key, tree.at(0).Key);
+                    try std.testing.expectEqual(max_key, tree.at(tree.len() - 1).Key);
+                }
+            }
+            try checkHeightAndBalance(&tree);
+        }
+        try std.testing.expect(tree.root == null and tree.min == null and tree.max == null);
+        try std.testing.expect(tree.popFirst() == null and tree.popLast() == null);
+    }
+    _ = try tree.insert(std.math.minInt(i64), 123);
+    _ = try tree.insert(std.math.maxInt(i64), 456);
+    const first = tree.popFirst().?;
+    const last = tree.popLast().?;
+    try std.testing.expectEqual(@as(i64, if (reverse) std.math.maxInt(i64) else std.math.minInt(i64)), first.Key);
+    try std.testing.expectEqual(@as(i64, if (reverse) 456 else 123), first.Value);
+    try std.testing.expectEqual(@as(i64, if (reverse) std.math.minInt(i64) else std.math.maxInt(i64)), last.Key);
+    try std.testing.expectEqual(@as(i64, if (reverse) 123 else 456), last.Value);
+}
+
+test "popFirst and popLast remove comparator extrema without comparisons" {
+    inline for (.{ .PointerBased, .ArrayBased, .StableArrayBased, .SplitArrayBased }) |backend| {
+        inline for (.{ false, true }) |counted| {
+            try testPopExtremes(.{ .nodeCacheType = backend, .countChildren = counted }, false);
+            try testPopExtremes(.{ .nodeCacheType = backend, .countChildren = counted }, true);
+        }
+    }
 }
 
 fn testExtremeKeyInsertion(comptime options: Options, comptime compare: fn (i64, i64) math.Order) !void {
