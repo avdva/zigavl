@@ -4,7 +4,7 @@
 
 ## Change
 
-`popFirst()` and `popLast()` copy the key/value pair at the cached `min` or
+`deleteFirst()` and `deleteLast()` copy the key/value pair at the cached `min` or
 `max` location and pass that location directly to `deleteLocation()`. An empty
 tree returns `null`. This skips root search and key comparisons without adding
 checks, hints, or fields to ordinary deletion. Rebalancing and subtree-count
@@ -12,7 +12,7 @@ maintenance are shared with the existing deletion APIs; worst-case complexity
 remains `O(log n)`.
 
 `deleteAt(0)` and `deleteAt(len() - 1)` already find these edges directly. The
-benchmark compares against them as well as `delete(key)`: the pop methods provide
+benchmark compares against them as well as `delete(key)`: these methods provide
 an explicit optional-result API, and should not be assumed faster than indexed
 edge deletion. First/last follow comparator order, including reversed comparators.
 
@@ -37,8 +37,8 @@ edge deletion. First/last follow comparator order, including reversed comparator
 - `delete(key)` receives the known next key; it does not perform a separate
   `getMin()` or `getMax()` call in the timed loop. `deleteAt()` uses index zero
   or the current `len() - 1`.
-- Popping the last element preserves ordered storage while the tree is nonempty.
-  Popping the first invalidates ordering after the first removal, so that
+- Deleting the last element preserves ordered storage while the tree is nonempty.
+  Deleting the first invalidates ordering after the first removal, so that
   scenario measures draining a tree initially stored in key order.
 - No compilation or tests run alongside timing. Timings include the common
   result-buffer writes and allocator frees where the backend performs them.
@@ -53,21 +53,25 @@ measurement variation rather than a consistently faster algorithm.
 All 75 tests pass in Debug and ReleaseSafe, alongside the existing expected
 unsupported-reservation compile error. The regression matrix covers every
 backend, count setting, and normal/reversed comparator. It verifies zero
-comparator calls during pops, every returned key/value pair, repeated empty
+comparator calls during edge deletions, every returned key/value pair, repeated empty
 calls, refill and slot reuse, deleted slots, ordered-storage preservation and
 invalidation, alternating ends, extreme i64 keys, ranks, and AVL invariants.
 The public consumer test and updated README example also exercise the methods.
 
 ## Results
 
+Timings were collected before the unreleased methods were renamed from
+`popFirst`/`popLast` to `deleteFirst`/`deleteLast`. Only API references and the
+benchmark label (`pop` to `by_edge`) were updated; numeric results are unchanged.
+
 Median ns/op at 250,000 elements without subtree counts. Percentages compare
-pop elapsed time with the named alternative: negative is faster. The
-[full CSV](bench-pop-extremes.csv) includes both sizes, count settings, storage
+by_edge elapsed time with the named alternative: negative is faster. The
+[full CSV](bench-delete-extremes.csv) includes both sizes, count settings, storage
 layouts, and minimum/maximum values across seven samples (168 summaries).
 
 ### Ordinary storage
 
-| Backend | End | delete(key) | deleteAt | pop | vs key | vs index |
+| Backend | End | delete(key) | deleteAt | by_edge | vs key | vs index |
 |---|---|---:|---:|---:|---:|---:|
 | pointer | first | 71.4 | 53.8 | 53.7 | -24.8% | -0.2% |
 | pointer | last | 69.2 | 53.5 | 51.7 | -25.2% | -3.3% |
@@ -80,7 +84,7 @@ layouts, and minimum/maximum values across seven samples (168 summaries).
 
 ### Initially ordered storage
 
-| Backend | End | delete(key) | deleteAt | pop | vs key | vs index |
+| Backend | End | delete(key) | deleteAt | by_edge | vs key | vs index |
 |---|---|---:|---:|---:|---:|---:|
 | array | first | 142.4 | 59.0 | 57.9 | -59.3% | -1.8% |
 | array | last | 139.7 | 57.8 | 58.0 | -58.5% | +0.3% |
@@ -91,18 +95,18 @@ layouts, and minimum/maximum values across seven samples (168 summaries).
 
 ### Scope and tradeoffs
 
-Across all backends, count settings, layouts, and ends at 10,000 elements, pop versus by_key ranges from -54.8% to -10.8% elapsed-time change; the median scenario change is -33.5%.
+Across all backends, count settings, layouts, and ends at 10,000 elements, by_edge versus by_key ranges from -54.8% to -10.8% elapsed-time change; the median scenario change is -33.5%.
 
-Across all backends, count settings, layouts, and ends at 10,000 elements, pop versus by_index ranges from -20.6% to +15.0% elapsed-time change; the median scenario change is -1.5%.
+Across all backends, count settings, layouts, and ends at 10,000 elements, by_edge versus by_index ranges from -20.6% to +15.0% elapsed-time change; the median scenario change is -1.5%.
 
-Across all backends, count settings, layouts, and ends at 250,000 elements, pop versus by_key ranges from -60.0% to -23.1% elapsed-time change; the median scenario change is -35.7%.
+Across all backends, count settings, layouts, and ends at 250,000 elements, by_edge versus by_key ranges from -60.0% to -23.1% elapsed-time change; the median scenario change is -35.7%.
 
-Across all backends, count settings, layouts, and ends at 250,000 elements, pop versus by_index ranges from -10.3% to +0.8% elapsed-time change; the median scenario change is -1.6%.
+Across all backends, count settings, layouts, and ends at 250,000 elements, by_edge versus by_index ranges from -10.3% to +0.8% elapsed-time change; the median scenario change is -1.6%.
 
 The small-tree comparison against indexed deletion has wider spread. Counted
-PointerBased `popLast` at 10,000 elements measures 38.4 versus 33.4 ns/op
+PointerBased `deleteLast` at 10,000 elements measures 38.4 versus 33.4 ns/op
 (+15.0%), with seven-sample ranges of 31.7–40.5 and 31.6–40.2 ns/op respectively.
-Counted SplitArrayBased `popLast` measures 136.4 versus 120.4 ns/op (+13.3%).
+Counted SplitArrayBased `deleteLast` measures 136.4 versus 120.4 ns/op (+13.3%).
 These results do not support a universal speedup over `deleteAt()`. The
 consistent distinction is removal of key search relative to `delete(key)` and
 an explicit empty-safe API. Medians across scenarios are descriptive, not

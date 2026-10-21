@@ -846,7 +846,7 @@ fn InitTreeType(comptime K: type, comptime V: type, comptime Cache: type, compti
         /// Removes and returns the first key/value pair in comparator order.
         /// Returns null for an empty tree. No key comparisons or root search;
         /// rebalancing and subtree-count maintenance can still take O(log n).
-        pub fn popFirst(self: *Self) ?KV {
+        pub fn deleteFirst(self: *Self) ?KV {
             const loc = self.min orelse return null;
             const kv = KV{ .Key = self.keyPtr(loc).*, .Value = self.valuePtr(loc).* };
             self.deleteLocation(loc);
@@ -854,8 +854,8 @@ fn InitTreeType(comptime K: type, comptime V: type, comptime Cache: type, compti
         }
 
         /// Removes and returns the last key/value pair in comparator order.
-        /// Returns null for an empty tree. Like popFirst(), returns owned values.
-        pub fn popLast(self: *Self) ?KV {
+        /// Returns null for an empty tree. Like deleteFirst(), returns owned values.
+        pub fn deleteLast(self: *Self) ?KV {
             const loc = self.max orelse return null;
             const kv = KV{ .Key = self.keyPtr(loc).*, .Value = self.valuePtr(loc).* };
             self.deleteLocation(loc);
@@ -2231,7 +2231,7 @@ test "tree ordered storage survives tail mutations" {
     try testTreeOrderedStorageTailMutations(.{ .countChildren = true, .nodeCacheType = .SplitArrayBased });
 }
 
-fn testPopExtremes(comptime options: Options, comptime reverse: bool) !void {
+fn testDeleteExtremes(comptime options: Options, comptime reverse: bool) !void {
     const Compare = struct {
         var calls: usize = 0;
         fn compare(a: i64, b: i64) math.Order {
@@ -2243,8 +2243,8 @@ fn testPopExtremes(comptime options: Options, comptime reverse: bool) !void {
     var tree = try T.init(std.testing.allocator);
     defer tree.deinit();
     for (0..3) |pattern| {
-        try std.testing.expect(tree.popFirst() == null);
-        try std.testing.expect(tree.popLast() == null);
+        try std.testing.expect(tree.deleteFirst() == null);
+        try std.testing.expect(tree.deleteLast() == null);
         // Shuffled dense keys, then deleted slots, exercise every backend's
         // reuse path and relocation during ordered-storage preparation.
         var keys: [65]i64 = undefined;
@@ -2262,7 +2262,7 @@ fn testPopExtremes(comptime options: Options, comptime reverse: bool) !void {
             const expected = if (take_low) low else high;
             const was_ordered = tree.storage_ordered;
             Compare.calls = 0;
-            const kv = (if (first) tree.popFirst() else tree.popLast()).?;
+            const kv = (if (first) tree.deleteFirst() else tree.deleteLast()).?;
             try std.testing.expectEqual(@as(usize, 0), Compare.calls);
             try std.testing.expectEqual(expected, kv.Key);
             try std.testing.expectEqual(expected * 10 + 7, kv.Value);
@@ -2293,23 +2293,23 @@ fn testPopExtremes(comptime options: Options, comptime reverse: bool) !void {
             try checkHeightAndBalance(&tree);
         }
         try std.testing.expect(tree.root == null and tree.min == null and tree.max == null);
-        try std.testing.expect(tree.popFirst() == null and tree.popLast() == null);
+        try std.testing.expect(tree.deleteFirst() == null and tree.deleteLast() == null);
     }
     _ = try tree.insert(std.math.minInt(i64), 123);
     _ = try tree.insert(std.math.maxInt(i64), 456);
-    const first = tree.popFirst().?;
-    const last = tree.popLast().?;
+    const first = tree.deleteFirst().?;
+    const last = tree.deleteLast().?;
     try std.testing.expectEqual(@as(i64, if (reverse) std.math.maxInt(i64) else std.math.minInt(i64)), first.Key);
     try std.testing.expectEqual(@as(i64, if (reverse) 456 else 123), first.Value);
     try std.testing.expectEqual(@as(i64, if (reverse) std.math.minInt(i64) else std.math.maxInt(i64)), last.Key);
     try std.testing.expectEqual(@as(i64, if (reverse) 123 else 456), last.Value);
 }
 
-test "popFirst and popLast remove comparator extrema without comparisons" {
+test "deleteFirst and deleteLast remove comparator extrema without comparisons" {
     inline for (.{ .PointerBased, .ArrayBased, .StableArrayBased, .SplitArrayBased }) |backend| {
         inline for (.{ false, true }) |counted| {
-            try testPopExtremes(.{ .nodeCacheType = backend, .countChildren = counted }, false);
-            try testPopExtremes(.{ .nodeCacheType = backend, .countChildren = counted }, true);
+            try testDeleteExtremes(.{ .nodeCacheType = backend, .countChildren = counted }, false);
+            try testDeleteExtremes(.{ .nodeCacheType = backend, .countChildren = counted }, true);
         }
     }
 }

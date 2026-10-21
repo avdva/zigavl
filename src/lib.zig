@@ -136,9 +136,9 @@ test "tree example usage" {
     }
 
     // Remove owned pairs directly from each edge.
-    const first = t.popFirst().?;
+    const first = t.deleteFirst().?;
     try std.testing.expectEqual(TreeType.KV{ .Key = 20, .Value = 200 }, first);
-    const last = t.popLast().?;
+    const last = t.deleteLast().?;
     try std.testing.expectEqual(TreeType.KV{ .Key = 22, .Value = 220 }, last);
     try std.testing.expectEqual(@as(usize, 1), t.len());
 
@@ -147,7 +147,7 @@ test "tree example usage" {
         @panic("invalid clear result");
     }
 
-    try std.testing.expect(t.popFirst() == null and t.popLast() == null);
+    try std.testing.expect(t.deleteFirst() == null and t.deleteLast() == null);
 
     // Reserve and reuse array storage between batches.
     const ReservedTree = TreeWithOptions(i64, i64, i64Cmp, .{ .nodeCacheType = .ArrayBased });
@@ -167,7 +167,7 @@ test "tree example usage" {
     reserved.orderStorageByKey();
     try std.testing.expectEqual(@as(i64, 7), reserved.at(0).Key);
     try std.testing.expectEqual(@as(i64, 9), reserved.at(1).Key);
-    try std.testing.expectEqual(ReservedTree.KV{ .Key = 7, .Value = 70 }, reserved.popFirst().?);
-    try std.testing.expectEqual(ReservedTree.KV{ .Key = 9, .Value = 90 }, reserved.popLast().?);
-    try std.testing.expect(reserved.popFirst() == null and reserved.popLast() == null);
+    try std.testing.expectEqual(ReservedTree.KV{ .Key = 7, .Value = 70 }, reserved.deleteFirst().?);
+    try std.testing.expectEqual(ReservedTree.KV{ .Key = 9, .Value = 90 }, reserved.deleteLast().?);
+    try std.testing.expect(reserved.deleteFirst() == null and reserved.deleteLast() == null);
 }
