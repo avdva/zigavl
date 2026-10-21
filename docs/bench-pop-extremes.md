@@ -2,10 +2,6 @@
 
 [Benchmark guide](benchmarks.md) · [API semantics](caches.md#removing-the-first-or-last-element)
 
-These measurements capture the initial pop-method change at `6c11ee1`, before
-adaptive lookup was added to `delete(key)`. See the
-[adaptive-delete comparison](bench-adaptive-delete.md) for the later change.
-
 ## Change
 
 `popFirst()` and `popLast()` copy the key/value pair at the cached `min` or

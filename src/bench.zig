@@ -722,82 +722,6 @@ fn benchInsertionMatrix(comptime backend: []const u8, comptime options: zigavl.O
 
 const ExtremeDeleteMethod = enum { pop, by_key, by_index };
 
-const AdaptiveDeleteWorkload = enum { first, last, random, misses };
-
-fn benchAdaptiveDelete(
-    comptime options: zigavl.Options,
-    comptime strings: bool,
-    comptime workload: AdaptiveDeleteWorkload,
-    name: []const u8,
-    a: std.mem.Allocator,
-    ids: []const i64,
-) !void {
-    const K = if (strings) [32]u8 else i64;
-    const T = zigavl.TreeWithOptions(K, i64, if (strings) stringCmp else i64Cmp, options);
-    var tree = try T.init(a);
-    defer tree.deinit();
-    for (ids) |id| _ = try tree.insert(workloadKey(strings, id * 2), id * 10 + 7);
-    // Start missing-key queries immediately after deleting an edge. A stale
-    // prediction must be disabled without changing the remaining contents.
-    if (workload == .misses) _ = tree.delete(workloadKey(strings, 0));
-    const queries = try a.alloc(K, ids.len);
-    defer a.free(queries);
-    for (queries, 0..) |*query, i| {
-        const id: i64 = switch (workload) {
-            .first => @intCast(i),
-            .last => @intCast(ids.len - i - 1),
-            .random, .misses => ids[i],
-        };
-        query.* = workloadKey(strings, id * 2 + @intFromBool(workload == .misses));
-    }
-    const removed = try a.alloc(?i64, ids.len);
-    defer a.free(removed);
-    const start = nowNs();
-    for (queries, removed) |query, *value| value.* = tree.delete(query);
-    const elapsed = nowNs() - start;
-    if (tree.len() != (if (workload == .misses) ids.len - 1 else @as(usize, 0)))
-        return error.InvalidBenchmarkResult;
-    var checksum: i64 = 0;
-    for (removed, 0..) |value, i| {
-        if (workload == .misses) {
-            if (value != null) return error.InvalidBenchmarkResult;
-        } else {
-            const id: i64 = switch (workload) {
-                .first => @intCast(i),
-                .last => @intCast(ids.len - i - 1),
-                .random => ids[i],
-                .misses => unreachable,
-            };
-            if (value == null or value.? != id * 10 + 7) return error.InvalidBenchmarkResult;
-            checksum += value.?;
-        }
-    }
-    if (workload == .misses) {
-        if (tree.get(workloadKey(strings, 0)) != null) return error.InvalidBenchmarkResult;
-        for (1..ids.len) |i| {
-            const id: i64 = @intCast(i);
-            const value = tree.get(workloadKey(strings, id * 2)) orelse return error.InvalidBenchmarkResult;
-            if (value.* != id * 10 + 7) return error.InvalidBenchmarkResult;
-        }
-    }
-    report(name, ids.len, elapsed, checksum);
-}
-
-fn benchAdaptiveDeleteMatrix(comptime backend: []const u8, comptime options: zigavl.Options, a: std.mem.Allocator, ids: []const i64, filter: ?[]const u8) !void {
-    inline for (.{ false, true }) |strings| {
-        inline for (.{ false, true }) |counted| {
-            if (!strings or !counted) {
-                inline for (comptime std.meta.tags(AdaptiveDeleteWorkload)) |workload| {
-                    const configured = zigavl.Options{ .nodeCacheType = options.nodeCacheType, .countChildren = counted };
-                    const name = backend ++ "/delete-adaptive/" ++ (if (strings) "string32/" else "i64/") ++
-                        (if (counted) "counted/" else "uncounted/") ++ @tagName(workload);
-                    if (shouldRun(filter, name)) try benchAdaptiveDelete(configured, strings, workload, name, a, ids);
-                }
-            }
-        }
-    }
-}
-
 fn benchExtremeDelete(
     comptime options: zigavl.Options,
     comptime first: bool,
@@ -862,7 +786,6 @@ fn benchExtremeDeleteMatrix(comptime backend: []const u8, comptime options: ziga
 }
 
 fn benchTree(comptime name: []const u8, comptime options: zigavl.Options, a: std.mem.Allocator, random_keys: []const i64, filter: ?[]const u8) !void {
-    try benchAdaptiveDeleteMatrix(name, options, a, random_keys, filter);
     try benchExtremeDeleteMatrix(name, options, a, random_keys, filter);
     try benchInsertionMatrix(name, options, a, random_keys, filter);
     try benchLookupMatrix(name, options, a, random_keys, filter);

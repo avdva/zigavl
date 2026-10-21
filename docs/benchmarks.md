@@ -82,18 +82,6 @@ zig build bench -Doptimize=ReleaseFast -Dbench-filter=delete-extreme/uncounted/t
 See the [popFirst/popLast comparison](bench-pop-extremes.md) for measurements
 against existing deletion methods and the limits of this workload.
 
-`delete-adaptive` compares edge runs, random successful deletions, and interleaved
-missing-key queries through `delete(key)`. It covers counted/uncounted i64 trees
-and uncounted fixed-width string-key trees on all backends. All scenarios start
-from identically shuffled even keys; missing queries use odd keys after one
-untimed edge deletion. Query construction, allocation, and complete result
-validation are outside timing. See the [adaptive-delete report](bench-adaptive-delete.md)
-for a comparison with the original root-search implementation.
-
-```sh
-zig build bench -Doptimize=ReleaseFast -Dbench-filter=delete-adaptive -Dbench-size=250000 -Dbench-repeat=7
-```
-
 See [the array node layout experiment](bench-node-layout.md) for measured
 slot sizes, comparison methodology, and preliminary timing results.
 
