@@ -2841,6 +2841,112 @@ test "tree lowerBoundRankWithCountChildren" {
     try std.testing.expectEqual(@as(?usize, null), t.lowerBoundRankWithCountChildren(81));
 }
 
+fn testMixedTreeOperations(comptime options: Options, seed: u64) !void {
+    const T = TreeWithOptions(i64, i64, i64Cmp, options);
+    const expectEqual = std.testing.expectEqual;
+    var tree = try T.init(std.testing.allocator);
+    defer tree.deinit();
+
+    // A bounded key domain makes hits, misses, and updateKey collisions
+    // frequent. The index is the key; null means the key is absent.
+    var model: [64]?i64 = @splat(null);
+    var prng = std.Random.DefaultPrng.init(seed);
+    const random = prng.random();
+    for (0..1500) |step| {
+        const operation = random.uintLessThan(u8, 16);
+        const key = random.uintLessThan(usize, model.len);
+        const tree_key: i64 = @intCast(key);
+        errdefer std.debug.print("mixed tree: backend={s}, counted={}, seed={d}, step={d}, operation={d}, key={d}\n", .{
+            @tagName(options.nodeCacheType), options.countChildren, seed, step, operation, key,
+        });
+
+        switch (operation) {
+            0...6 => {
+                const value: i64 = -1 - @as(i64, @intCast(step));
+                const result = try tree.insert(tree_key, value);
+                try expectEqual(model[key] == null, result.inserted);
+                try expectEqual(value, result.v.*);
+                model[key] = value;
+            },
+            7, 8 => {
+                try expectEqual(model[key], tree.delete(tree_key));
+                model[key] = null;
+            },
+            9...11 => {
+                const new_key = random.uintLessThan(usize, model.len);
+                const expected = model[key];
+                const result = tree.updateKey(tree_key, @intCast(new_key));
+                try expectEqual(expected, if (result) |value| value.* else null);
+                if (expected != null) {
+                    model[key] = null;
+                    model[new_key] = expected;
+                }
+            },
+            12 => {
+                const capacity = random.uintLessThan(usize, 1500);
+                if (options.nodeCacheType != .PointerBased) try tree.ensureCapacity(capacity);
+            },
+            13 => tree.orderStorageByKey(),
+            14 => tree.compactStorage(),
+            15 => {
+                const first = random.boolean();
+                const result = if (first) tree.deleteFirst() else tree.deleteLast();
+                var expected: ?T.KV = null;
+                for (0..model.len) |offset| {
+                    const edge = if (first) offset else model.len - 1 - offset;
+                    if (model[edge]) |value| {
+                        expected = .{ .Key = @intCast(edge), .Value = value };
+                        model[edge] = null;
+                        break;
+                    }
+                }
+                try expectEqual(expected, result);
+            },
+            else => unreachable,
+        }
+
+        var forward = tree.iteratorAtFirst();
+        var reverse = tree.iteratorAtLast();
+        var count: usize = 0;
+        for (model, 0..) |expected, i| {
+            const k: i64 = @intCast(i);
+            const found = tree.get(k);
+            try expectEqual(expected, if (found) |value| value.* else null);
+            if (expected) |value| {
+                const entry = forward.value() orelse return error.MissingEntry;
+                try expectEqual(k, entry.Key);
+                try expectEqual(value, entry.Value.*);
+                if (options.countChildren) {
+                    try expectEqual(@as(?usize, count), tree.rank(k));
+                    try expectEqual(k, tree.at(count).Key);
+                }
+                count += 1;
+                forward.next();
+            }
+            const reverse_key = model.len - 1 - i;
+            if (model[reverse_key]) |value| {
+                const entry = reverse.value() orelse return error.MissingEntry;
+                try expectEqual(@as(i64, @intCast(reverse_key)), entry.Key);
+                try expectEqual(value, entry.Value.*);
+                reverse.prev();
+            }
+        }
+        try std.testing.expect(forward.value() == null and reverse.value() == null);
+        try expectEqual(count, tree.len());
+        try checkHeightAndBalance(&tree);
+    }
+}
+
+test "mixed tree operations match a reference model" {
+    inline for (.{ .PointerBased, .ArrayBased, .StableArrayBased, .SplitArrayBased }) |backend| {
+        inline for (.{ false, true }) |counted| {
+            for ([_]u64{ 0, 42, 2026 }) |seed| {
+                try testMixedTreeOperations(.{ .nodeCacheType = backend, .countChildren = counted }, seed);
+            }
+        }
+    }
+}
+
 fn testTreeRandom(comptime options: Options) !void {
     var a = std.testing.allocator;
     const TreeType = TreeWithOptions(i64, i64, i64Cmp, options);
